@@ -4,7 +4,7 @@ This project implements and compares two character-level language models trained
 
 ## Project Overview
 
-- **Dataset**: enwik8 (100M characters from Wikipedia)
+- **Dataset**: enwik8 (~100M characters from Wikipedia)
 - **Task**: Character-level language modeling
 - **Baseline**: Standard GPT-style transformer
 - **Novel Approach**: GPT with Rotary Position Embeddings (RoPE)
