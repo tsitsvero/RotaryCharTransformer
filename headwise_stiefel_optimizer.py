@@ -17,9 +17,18 @@ class HeadwiseStiefelAdam(Optimizer):
         # Initialize parameters more carefully
         for group in self.param_groups:
             for p in group['params']:
-                # QR decomposition for better orthogonal initialization
-                q, r = torch.linalg.qr(p.data)
-                p.data.copy_(q)
+                # Get the shape of the parameter
+                rows, cols = p.size()
+                if rows > cols:
+                    # If we have more rows than columns, pad with zeros
+                    temp = torch.zeros(rows, rows, device=p.device)
+                    temp[:, :cols] = p.data
+                    q, r = torch.linalg.qr(temp)
+                    p.data.copy_(q[:, :cols])
+                else:
+                    # If we have more columns than rows or equal dimensions
+                    q, r = torch.linalg.qr(p.data.t())
+                    p.data.copy_(q[:, :rows].t())
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -86,12 +95,16 @@ class HeadwiseStiefelAdam(Optimizer):
                 denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(eps)
                 update = exp_avg / bias_correction1 / denom
                 
-                # Compute skew-symmetric matrix for update
+                # Project update onto tangent space of Stiefel manifold
                 A = update @ p.t()
                 skew = (A - A.t()) / 2
+                update = update - p @ A + p @ skew
                 
-                # Use Cayley retraction instead of SVD
+                # Update parameter while staying on Stiefel manifold
+                p.add_(update, alpha=-lr)
+                
+                # Use Cayley retraction for final projection
                 p_new = cayley_retraction(p, -lr * skew)
                 p.copy_(p_new)
 
-        return loss 
+        return loss
