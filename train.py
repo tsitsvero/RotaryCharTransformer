@@ -255,15 +255,44 @@ def main():
 
     # Initialize wandb
     if master_process:
+        # Filter out non-serializable config values
+        wandb_config = {
+            'learning_rate': config['learning_rate'],
+            'batch_size': config['batch_size'],
+            'block_size': config['block_size'],
+            'max_iters': config['max_iters'],
+            'weight_decay': config['weight_decay'],
+            'beta1': config['beta1'],
+            'beta2': config['beta2'],
+            'grad_clip': config['grad_clip'],
+            'decay_lr': config['decay_lr'],
+            'min_lr': config['min_lr'],
+            'warmup_iters': config['warmup_iters'],
+            'lr_decay_iters': config['lr_decay_iters'],
+            'eval_interval': config['eval_interval'],
+            'log_interval': config['log_interval'],
+            'dataset': config['dataset'],
+            'dtype': config['dtype'],
+            'model_type': config.get('model_type', 'baseline'),
+            'n_layer': config['n_layer'],
+            'n_head': config['n_head'],
+            'n_embd': config['n_embd'],
+            'dropout': config['dropout'],
+            'bias': config['bias'],
+            'vocab_size': config['vocab_size'],
+            # Add custom tracking fields
+            'use_stiefel': use_stiefel,
+            'stiefel_last_layer_only': True,
+            'total_params': total_params,
+            'device_type': device_type,
+            'gradient_accumulation_steps': config['gradient_accumulation_steps'],
+            'tokens_per_iter': tokens_per_iter,
+        }
+        
         wandb.init(
             project="transformer-stiefel",
-            config={
-                **config,
-                'model_type': config.get('model_type', 'baseline'),
-                'use_stiefel': use_stiefel,
-                'stiefel_last_layer_only': True,
-                'total_params': sum(p.numel() for p in model.parameters()),
-            }
+            config=wandb_config,
+            name=f"{config.get('model_type', 'baseline')}_stiefel_{use_stiefel}"
         )
 
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
