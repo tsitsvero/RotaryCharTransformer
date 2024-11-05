@@ -139,40 +139,40 @@ def main():
         last_layer_idx = model.config.n_layer - 1
         
         for n, p in param_dict.items():
-            # Only apply Stiefel to attention layers after certain depth
-            layer_idx = int(n.split('.')[2]) if '.h.' in n else -1
-            is_deep_layer = layer_idx >= (model.config.n_layer // 2)
-            
-            if (any(x in n for x in ['.q.weight', '.k.weight']) and 
-                is_deep_layer):  # Only apply to deeper layers
+            # Apply Stiefel to all Q,K weights in attention layers
+            if any(x in n for x in ['.q.weight', '.k.weight']):
                 # Reshape the weight matrix to separate heads
                 n_head = model.config.n_head
                 head_dim = model.config.n_embd // n_head
+                n_embd = model.config.n_embd
+                
+                # Reshape to [n_head, head_dim, n_embd]
+                if '.q.weight' in n:
+                    p_reshaped = p.view(n_head, head_dim, n_embd)
+                else:  # k.weight
+                    p_reshaped = p.view(n_head, head_dim, n_embd)
                 
                 # Create a parameter for each head's portion of the weight matrix
-                p_reshaped = p.view(n_head, head_dim, -1)
-                
-                # Initialize each head's weights to be orthogonal
                 for head_idx in range(n_head):
-                    torch.nn.init.orthogonal_(p_reshaped[head_idx])
-                    
-                    # Create a new parameter for this head's portion
+                    # Initialize each head's weights to be orthogonal
                     head_param = p_reshaped[head_idx].clone().detach().requires_grad_(True)
+                    torch.nn.init.orthogonal_(head_param)
                     
                     stiefel_params_by_head.append({
                         'params': [head_param],
                         'head_idx': head_idx,
                         'is_q': '.q.weight' in n,
                         'layer_name': n,
-                        'original_shape': p.shape
+                        'original_shape': p.shape,
+                        'weight_decay': config['weight_decay']  # Add weight decay
                     })
                 
                 # Since we're handling this parameter through individual head parameters,
                 # don't include the original parameter in the optimizer
                 p.requires_grad_(False)
-                print(f"Added Stiefel parameters from last layer: {n}, split into {n_head} heads")
+                print(f"Added Stiefel parameters: {n}, split into {n_head} heads")
             
-            # All other parameters (including Q,K from other layers) use regular optimization
+            # All other parameters use regular optimization
             elif p.dim() >= 2:
                 euclidean_decay_params.append(p)
             else:

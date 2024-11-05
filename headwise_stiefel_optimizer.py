@@ -60,6 +60,12 @@ class HeadwiseStiefelAdam(Optimizer):
             state_steps = []
             beta1, beta2 = group['betas']
 
+            # Get head info
+            head_idx = group['head_idx']
+            layer_name = group['layer_name']
+            is_q = group['is_q']
+            original_shape = group['original_shape']
+            
             for p in group['params']:
                 if p.grad is not None:
                     params_with_grad.append(p)
@@ -120,6 +126,6 @@ class HeadwiseStiefelAdam(Optimizer):
                 
                 # Retraction step using QR decomposition (more stable than Cayley)
                 q, r = torch.linalg.qr(param)
-                param.copy_(q)
+                param.data.copy_(q)
 
         return loss

@@ -202,15 +202,32 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        # Split Q,K,V into separate linear layers
-        self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        
+        # Initialize head-wise parameters
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        head_dim = config.n_embd // config.n_head
+        
+        # Create Parameters for each head's Q and K matrices
+        self.q_heads = nn.ParameterList([
+            nn.Parameter(torch.empty(head_dim, config.n_embd))
+            for _ in range(config.n_head)
+        ])
+        self.k_heads = nn.ParameterList([
+            nn.Parameter(torch.empty(head_dim, config.n_embd))
+            for _ in range(config.n_head)
+        ])
+        
+        # Initialize orthogonally
+        for q, k in zip(self.q_heads, self.k_heads):
+            nn.init.orthogonal_(q)
+            nn.init.orthogonal_(k)
+        
+        # Regular parameters
         self.v = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
         self.dropout = config.dropout
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
@@ -219,21 +236,37 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         B, T, C = x.size()
         
-        # Separate Q,K,V projections
-        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        # Process each head separately
+        q_list = []
+        k_list = []
+        for q_head, k_head in zip(self.q_heads, self.k_heads):
+            q = torch.matmul(x, q_head.t()).view(B, T, 1, C // self.n_head)
+            k = torch.matmul(x, k_head.t()).view(B, T, 1, C // self.n_head)
+            q_list.append(q)
+            k_list.append(k)
+        
+        # Concatenate heads
+        q = torch.cat(q_list, dim=2)  # [B, T, n_head, head_dim]
+        k = torch.cat(k_list, dim=2)  # [B, T, n_head, head_dim]
+        v = self.v(x).view(B, T, self.n_head, C // self.n_head)  # [B, T, n_head, head_dim]
+        
+        # Transpose for attention
+        q = q.transpose(1, 2)  # [B, n_head, T, head_dim]
+        k = k.transpose(1, 2)  # [B, n_head, T, head_dim]
+        v = v.transpose(1, 2)  # [B, n_head, T, head_dim]
 
         # Apply rotary embeddings to q and k
         q, k = self.rotary_emb(q, k)
 
+        # Compute attention
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
-        y = att @ v
+        y = att @ v  # [B, n_head, T, head_dim]
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        # Reshape and project output
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # [B, T, C]
         y = self.resid_dropout(self.c_proj(y))
         return y
 
