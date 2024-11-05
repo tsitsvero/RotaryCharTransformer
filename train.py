@@ -108,7 +108,7 @@ def main():
 
     model.to(device)
 
-    use_stiefel = False
+    use_stiefel = True
 
     if not use_stiefel:
 
