@@ -7,7 +7,7 @@ eval_iters = 200
 log_interval = 100
 
 always_save_checkpoint = True  # Ensure we save checkpoints
-wandb_log = False
+wandb_log = True
 wandb_project = 'enwik8-char'
 wandb_run_name = 'gpt2-enwik8-char-rope'
 
