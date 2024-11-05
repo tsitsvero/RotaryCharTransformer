@@ -139,8 +139,12 @@ def main():
         last_layer_idx = model.config.n_layer - 1
         
         for n, p in param_dict.items():
-            # Only Q and K weights of the last layer should be on Stiefel manifold
-            if any(x in n for x in ['.q.weight', '.k.weight']) and f'h.{last_layer_idx}' in n:
+            # Only apply Stiefel to attention layers after certain depth
+            layer_idx = int(n.split('.')[2]) if '.h.' in n else -1
+            is_deep_layer = layer_idx >= (model.config.n_layer // 2)
+            
+            if (any(x in n for x in ['.q.weight', '.k.weight']) and 
+                is_deep_layer):  # Only apply to deeper layers
                 # Reshape the weight matrix to separate heads
                 n_head = model.config.n_head
                 head_dim = model.config.n_embd // n_head
