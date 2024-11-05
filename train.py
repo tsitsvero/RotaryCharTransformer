@@ -286,7 +286,7 @@ def main():
             'vocab_size': config['vocab_size'],
             # Add custom tracking fields
             'use_stiefel': use_stiefel,
-            'stiefel_last_layer_only': True,
+            # 'stiefel_last_layer_only': True,
             'total_params': total_params,
             'device_type': device_type,
             'gradient_accumulation_steps': config['gradient_accumulation_steps'],

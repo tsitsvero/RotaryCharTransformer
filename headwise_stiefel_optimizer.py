@@ -9,9 +9,20 @@ def orthogonality_penalty(W):
     return torch.norm(WtW - I, p='fro')
 
 class HeadwiseStiefelAdam(Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, ortho_lambda=0.01):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01, ortho_lambda=0.01):
+        if not 0.0 <= lr:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= eps:
+            raise ValueError(f"Invalid epsilon value: {eps}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
+        if not 0.0 <= weight_decay:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+            
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         self.ortho_lambda = ortho_lambda
-        defaults = dict(lr=lr, betas=betas, eps=eps)
         super(HeadwiseStiefelAdam, self).__init__(params, defaults)
         
         # Initialize parameters more carefully
@@ -41,70 +52,74 @@ class HeadwiseStiefelAdam(Optimizer):
                     for p in group['params']:
                         loss = loss + self.ortho_lambda * orthogonality_penalty(p)
 
-        # Improved retraction using Cayley transform
-        def cayley_retraction(X, G):
-            n = X.size(0)
-            I = torch.eye(n, device=X.device)
-            A = G @ X.t() - X @ G.t()
-            Q = I + A/2
-            R = I - A/2
-            Y = torch.linalg.solve(R, Q) @ X
-            return Y
-
         for group in self.param_groups:
-            lr = group['lr']
+            params_with_grad = []
+            grads = []
+            exp_avgs = []
+            exp_avg_sqs = []
+            state_steps = []
             beta1, beta2 = group['betas']
-            eps = group['eps']
-            head_idx = group['head_idx']
-            layer_name = group['layer_name']
-            is_q = group['is_q']
-            original_shape = group['original_shape']
 
             for p in group['params']:
-                if p.grad is None:
-                    continue
+                if p.grad is not None:
+                    params_with_grad.append(p)
+                    grads.append(p.grad)
+                    state = self.state[p]
 
-                # Scale gradients based on manifold curvature
-                grad_norm = torch.norm(p.grad)
-                manifold_scale = torch.sqrt(p.size(0))  # Manifold dimension
-                p.grad.mul_(manifold_scale / (grad_norm + 1e-8))
+                    # Lazy state initialization
+                    if len(state) == 0:
+                        state['step'] = 0
+                        state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                        state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
-                # Get the original parameter from the model
-                param_state = self.state[p]
+                    exp_avgs.append(state['exp_avg'])
+                    exp_avg_sqs.append(state['exp_avg_sq'])
+                    state['step'] += 1
+                    state_steps.append(state['step'])
 
-                # Initialize state if needed
-                if len(param_state) == 0:
-                    param_state['step'] = 0
-                    param_state['exp_avg'] = torch.zeros_like(p)
-                    param_state['exp_avg_sq'] = torch.zeros_like(p)
-
-                # Update step
-                param_state['step'] += 1
-
-                exp_avg, exp_avg_sq = param_state['exp_avg'], param_state['exp_avg_sq']
+            # Update parameters for this group
+            for i, param in enumerate(params_with_grad):
+                grad = grads[i]
+                exp_avg = exp_avgs[i]
+                exp_avg_sq = exp_avg_sqs[i]
+                step = state_steps[i]
                 
-                # Update biased first and second moment estimates
-                exp_avg.mul_(beta1).add_(p.grad, alpha=1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(p.grad, p.grad, value=1 - beta2)
+                # Scale gradients based on manifold curvature
+                grad_norm = torch.norm(grad)
+                manifold_scale = torch.sqrt(param.size(0))
+                grad = grad * (manifold_scale / (grad_norm + group['eps']))
+
+                # Decay the first and second moment running average coefficient
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                step_size = group['lr']
 
                 # Bias correction
-                bias_correction1 = 1 - beta1 ** param_state['step']
-                bias_correction2 = 1 - beta2 ** param_state['step']
+                bias_correction1 = 1 - beta1 ** step
+                bias_correction2 = 1 - beta2 ** step
                 
-                # Compute the update direction
-                denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(eps)
-                update = exp_avg / bias_correction1 / denom
+                # Apply bias correction and weight decay
+                step_size = group['lr'] / bias_correction1
+                
+                # Weight decay term (AdamW-style)
+                if group['weight_decay'] != 0:
+                    param.data.mul_(1 - group['lr'] * group['weight_decay'])
+
+                # Compute the update
+                denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
+                update = exp_avg / denom
                 
                 # Project update onto tangent space of Stiefel manifold
-                A = update @ p.t()
+                A = update @ param.t()
                 skew = (A - A.t()) / 2
-                update = update - p @ A + p @ skew
+                update = update - param @ A + param @ skew
                 
-                # Update parameter while staying on Stiefel manifold
-                p.add_(update, alpha=-lr)
+                # Update parameter
+                param.add_(update, alpha=-step_size)
                 
-                # Use Cayley retraction for final projection
-                p_new = cayley_retraction(p, -lr * skew)
-                p.copy_(p_new)
+                # Retraction step using QR decomposition (more stable than Cayley)
+                q, r = torch.linalg.qr(param)
+                param.copy_(q)
 
         return loss

@@ -22,8 +22,6 @@ n_head = 8
 n_embd = 512
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
-use_rational = True  # Use Rational activation function
-use_stiefel = False  # Use Stiefel optimizer
 
 # Optimization parameters
 learning_rate = 1e-3
@@ -37,6 +35,9 @@ grad_clip = 1.0
 decay_lr = True
 warmup_iters = 100
 init_from = 'scratch'  # Initialize model from scratch
+
+use_rational = True  # Use Rational activation function
+use_stiefel = False  # Use Stiefel optimizer
 
 # Use the modified model
 model_type = 'rope'
