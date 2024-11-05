@@ -22,6 +22,8 @@ n_head = 8
 n_embd = 512
 dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
+use_rational = True  # Use Rational activation function
+use_stiefel = False  # Use Stiefel optimizer
 
 # Optimization parameters
 learning_rate = 1e-3
