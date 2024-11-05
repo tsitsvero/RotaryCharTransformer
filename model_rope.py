@@ -114,72 +114,72 @@ class GPTWithRoPE(nn.Module):
 
     #     return optimizer
     
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type, use_stiefel=True):
-        """Configure optimizers with option to use Stiefel optimizer for attention Q,K weights"""
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    # def configure_optimizers(self, weight_decay, learning_rate, betas, device_type, use_stiefel=True):
+    #     """Configure optimizers with option to use Stiefel optimizer for attention Q,K weights"""
+    #     # start with all of the candidate parameters
+    #     param_dict = {pn: p for pn, p in self.named_parameters()}
+    #     # filter out those that do not require grad
+    #     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
 
-        if use_stiefel:
-            # Separate parameters into Stiefel (Q,K weights) and Euclidean groups
-            stiefel_params = []
-            euclidean_decay_params = []
-            euclidean_nodecay_params = []
+    #     if use_stiefel:
+    #         # Separate parameters into Stiefel (Q,K weights) and Euclidean groups
+    #         stiefel_params = []
+    #         euclidean_decay_params = []
+    #         euclidean_nodecay_params = []
 
-            for n, p in param_dict.items():
-                # Q,K weights from attention should be on Stiefel manifold
-                if any(x in n for x in ['q.weight', 'k.weight']):
-                    torch.nn.init.orthogonal_(p)  # Initialize Q,K weights to be orthogonal
-                    stiefel_params.append(p)
-                # Regular weight matrices get weight decay
-                elif p.dim() >= 2:
-                    euclidean_decay_params.append(p)
-                # Biases and LayerNorm parameters don't get weight decay
-                else:
-                    euclidean_nodecay_params.append(p)
+    #         for n, p in param_dict.items():
+    #             # Q,K weights from attention should be on Stiefel manifold
+    #             if any(x in n for x in ['q.weight', 'k.weight']):
+    #                 torch.nn.init.orthogonal_(p)  # Initialize Q,K weights to be orthogonal
+    #                 stiefel_params.append(p)
+    #             # Regular weight matrices get weight decay
+    #             elif p.dim() >= 2:
+    #                 euclidean_decay_params.append(p)
+    #             # Biases and LayerNorm parameters don't get weight decay
+    #             else:
+    #                 euclidean_nodecay_params.append(p)
 
-            # Create parameter groups for Euclidean Adam
-            euclidean_groups = [
-                {'params': euclidean_decay_params, 'weight_decay': weight_decay},
-                {'params': euclidean_nodecay_params, 'weight_decay': 0.0}
-            ]
+    #         # Create parameter groups for Euclidean Adam
+    #         euclidean_groups = [
+    #             {'params': euclidean_decay_params, 'weight_decay': weight_decay},
+    #             {'params': euclidean_nodecay_params, 'weight_decay': 0.0}
+    #         ]
 
-            # Create optimizers
-            fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-            use_fused = fused_available and device_type == 'cuda'
-            extra_args = dict(fused=True) if use_fused else dict()
+    #         # Create optimizers
+    #         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    #         use_fused = fused_available and device_type == 'cuda'
+    #         extra_args = dict(fused=True) if use_fused else dict()
             
-            euclidean_optimizer = torch.optim.AdamW(euclidean_groups, lr=learning_rate, betas=betas, **extra_args)
-            stiefel_optimizer = StiefelAdam([{'params': stiefel_params}], lr=learning_rate, betas=betas)
+    #         euclidean_optimizer = torch.optim.AdamW(euclidean_groups, lr=learning_rate, betas=betas, **extra_args)
+    #         stiefel_optimizer = StiefelAdam([{'params': stiefel_params}], lr=learning_rate, betas=betas)
             
-            # Combine optimizers
-            optimizer = CombinedOptimizer(euclidean_optimizer, stiefel_optimizer)
+    #         # Combine optimizers
+    #         optimizer = CombinedOptimizer(euclidean_optimizer, stiefel_optimizer)
             
-            print(f"Using Stiefel optimizer for {len(stiefel_params)} Q,K weight matrices")
-            print(f"Euclidean optimizer: {len(euclidean_decay_params)} decay params, {len(euclidean_nodecay_params)} no-decay params")
-            print(f"Using fused AdamW for Euclidean params: {use_fused}")
+    #         print(f"Using Stiefel optimizer for {len(stiefel_params)} Q,K weight matrices")
+    #         print(f"Euclidean optimizer: {len(euclidean_decay_params)} decay params, {len(euclidean_nodecay_params)} no-decay params")
+    #         print(f"Using fused AdamW for Euclidean params: {use_fused}")
 
-        else:
-            # Default AdamW optimization for all parameters
-            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-            optim_groups = [
-                {'params': decay_params, 'weight_decay': weight_decay},
-                {'params': nodecay_params, 'weight_decay': 0.0}
-            ]
+    #     else:
+    #         # Default AdamW optimization for all parameters
+    #         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+    #         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    #         optim_groups = [
+    #             {'params': decay_params, 'weight_decay': weight_decay},
+    #             {'params': nodecay_params, 'weight_decay': 0.0}
+    #         ]
             
-            fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-            use_fused = fused_available and device_type == 'cuda'
-            extra_args = dict(fused=True) if use_fused else dict()
-            optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+    #         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    #         use_fused = fused_available and device_type == 'cuda'
+    #         extra_args = dict(fused=True) if use_fused else dict()
+    #         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
             
-            print(f"Using standard AdamW for all parameters")
-            print(f"num decayed parameter tensors: {len(decay_params)}")
-            print(f"num non-decayed parameter tensors: {len(nodecay_params)}")
-            print(f"using fused AdamW: {use_fused}")
+    #         print(f"Using standard AdamW for all parameters")
+    #         print(f"num decayed parameter tensors: {len(decay_params)}")
+    #         print(f"num non-decayed parameter tensors: {len(nodecay_params)}")
+    #         print(f"using fused AdamW: {use_fused}")
 
-        return optimizer
+    #     return optimizer
 
 
 

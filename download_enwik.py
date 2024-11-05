@@ -1,7 +1,7 @@
 from datasets import load_dataset
 
 # Load the enwik8 dataset
-dataset = load_dataset("LTCB/enwik8", split="train")
+dataset = load_dataset("LTCB/enwik8", split="train", trust_remote_code=True)
 
 # Extract the raw text from the dataset
 raw_text = ''.join(dataset['text'])

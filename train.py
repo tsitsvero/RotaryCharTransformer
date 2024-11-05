@@ -5,6 +5,7 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+import inspect
 
 import numpy as np
 import torch
@@ -16,6 +17,10 @@ from tqdm import tqdm
 from model import GPTConfig
 from model_baseline import BaselineGPT
 from model_rope import GPTWithRoPE
+
+
+# Import StiefelAdam
+from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
@@ -100,16 +105,77 @@ def main():
 
     model.to(device)
 
-    # Initialize optimizer outside of the model
-    decay_params = [p for p in model.parameters() if p.dim() >= 2]
-    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    use_stiefel = True
 
-    optimizer = optim.AdamW([
-        {'params': decay_params, 'weight_decay': config['weight_decay']},
-        {'params': no_decay_params, 'weight_decay': 0.0}
-    ], lr=config['learning_rate'], betas=(config['beta1'], config['beta2']))
+    if not use_stiefel:
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(config['dtype'] == 'float16'))
+        # Initialize optimizer outside of the model
+        decay_params = [p for p in model.parameters() if p.dim() >= 2]
+        no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+
+        optimizer = optim.AdamW([
+            {'params': decay_params, 'weight_decay': config['weight_decay']},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+        ], lr=config['learning_rate'], betas=(config['beta1'], config['beta2']))
+
+        if config['dtype'] == 'float16':
+            scaler = torch.cuda.amp.GradScaler()
+        else:
+            scaler = None
+
+    else:
+        # Separate parameters into Stiefel (Q,K weights) and Euclidean groups
+        param_dict = {pn: p for pn, p in model.named_parameters() if p.requires_grad}
+        stiefel_params = []
+        euclidean_decay_params = []
+        euclidean_nodecay_params = []
+
+        for n, p in param_dict.items():
+            # Q,K weights are in the c_attn layer of CausalSelfAttention
+            if 'c_attn.weight' in n:
+                # Initialize the full weight matrix to be orthogonal
+                torch.nn.init.orthogonal_(p)
+                # Add the entire weight matrix to Stiefel parameters
+                stiefel_params.append(p)
+                print(f"Added Stiefel parameters from layer: {n}")
+            # Regular weight matrices get weight decay
+            elif p.dim() >= 2:
+                euclidean_decay_params.append(p)
+            # Biases and LayerNorm parameters don't get weight decay
+            else:
+                euclidean_nodecay_params.append(p)
+
+        # Create parameter groups for Euclidean Adam
+        euclidean_groups = [
+            {'params': euclidean_decay_params, 'weight_decay': config['weight_decay']},
+            {'params': euclidean_nodecay_params, 'weight_decay': 0.0}
+        ]
+
+        # Create optimizers
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        
+        euclidean_optimizer = torch.optim.AdamW(euclidean_groups, lr=config['learning_rate'], 
+                                               betas=(config['beta1'], config['beta2']), **extra_args)
+        stiefel_optimizer = StiefelAdam([{'params': stiefel_params}], lr=config['learning_rate'], 
+                                       betas=(config['beta1'], config['beta2']))
+        
+        # Combine optimizers
+        optimizer = CombinedOptimizer(euclidean_optimizer, stiefel_optimizer)
+        
+        print(f"Using Stiefel optimizer for {len(stiefel_params)} Q,K weight matrices")
+        print(f"Euclidean optimizer: {len(euclidean_decay_params)} decay params, {len(euclidean_nodecay_params)} no-decay params")
+        print(f"Using fused AdamW for Euclidean params: {use_fused}")
+
+        if config['dtype'] == 'float16':
+            scaler = torch.amp.GradScaler('cuda')
+        else:
+            scaler = None
+
+
+
+
 
     iter_num = 0
     best_val_loss = 1e9
@@ -164,21 +230,59 @@ def main():
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
+            optimizer.zero_grad(set_to_none=True)
+            total_loss = 0.0
+
+            # Accumulate gradients
             for micro_step in range(config['gradient_accumulation_steps']):
                 if ddp:
                     model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
+                
+                # Forward pass
                 with ctx:
                     logits, loss = model(X, Y)
                     loss = loss / config['gradient_accumulation_steps']
-                X, Y = get_batch('train')
-                scaler.scale(loss).backward()
+                
+                # Backward pass with scaling if needed
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+                    
+                total_loss += loss.item()
+                X, Y = get_batch('train')  # Get next batch
+            
+            # Define closure for the Stiefel optimizer
+            if use_stiefel:
+                def closure():
+                    return total_loss
 
-            if config['grad_clip'] != 0.0:
+            # Handle gradient clipping and optimization step
+            if scaler is not None:
+                # First unscale the gradients
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
+                
+                # Clip gradients if needed
+                if config['grad_clip'] != 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+                
+                # Step with closure for Stiefel optimizer
+                if use_stiefel:
+                    scaler.step(optimizer, closure)
+                else:
+                    scaler.step(optimizer)
+                    
+                scaler.update()
+            else:
+                # Clip gradients if needed
+                if config['grad_clip'] != 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+                
+                # Step with closure for Stiefel optimizer
+                if use_stiefel:
+                    optimizer.step(closure)
+                else:
+                    optimizer.step()
 
             t1 = time.time()
             dt = t1 - t0
