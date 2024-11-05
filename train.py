@@ -22,6 +22,9 @@ from model_rope import GPTWithRoPE
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 
+# Import HeadwiseStiefelAdam
+from headwise_stiefel_optimizer import HeadwiseStiefelAdam
+
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
 
@@ -126,16 +129,34 @@ def main():
     else:
         # Separate parameters into Stiefel (Q,K weights) and Euclidean groups
         param_dict = {pn: p for pn, p in model.named_parameters() if p.requires_grad}
-        stiefel_params = []
+        stiefel_params_by_head = []
         euclidean_decay_params = []
         euclidean_nodecay_params = []
 
         for n, p in param_dict.items():
             # Only Q and K weights should be on Stiefel manifold
             if any(x in n for x in ['.q.weight', '.k.weight']):
-                torch.nn.init.orthogonal_(p)  # Initialize Q,K weights to be orthogonal
-                stiefel_params.append(p)
-                print(f"Added Stiefel parameters from layer: {n}")
+                # Reshape the weight matrix to separate heads
+                n_head = model.config.n_head
+                head_dim = model.config.n_embd // n_head
+                
+                # Reshape to [n_head, head_dim, n_embd]
+                p_reshaped = p.view(n_head, head_dim, -1)
+                
+                # Initialize each head's weights to be orthogonal
+                for head_idx in range(n_head):
+                    torch.nn.init.orthogonal_(p_reshaped[head_idx])
+                
+                # Group parameters by head
+                for head_idx in range(n_head):
+                    stiefel_params_by_head.append({
+                        'params': [p],
+                        'head_idx': head_idx,
+                        'is_q': '.q.weight' in n,
+                        'original_shape': p.shape
+                    })
+                print(f"Added Stiefel parameters from layer: {n}, split into {n_head} heads")
+            
             # Regular weight matrices get weight decay
             elif p.dim() >= 2:
                 euclidean_decay_params.append(p)
@@ -156,13 +177,13 @@ def main():
         
         euclidean_optimizer = torch.optim.AdamW(euclidean_groups, lr=config['learning_rate'], 
                                                betas=(config['beta1'], config['beta2']), **extra_args)
-        stiefel_optimizer = StiefelAdam([{'params': stiefel_params}], lr=config['learning_rate'], 
-                                       betas=(config['beta1'], config['beta2']))
+        stiefel_optimizer = HeadwiseStiefelAdam(stiefel_params_by_head, lr=config['learning_rate'], 
+                                               betas=(config['beta1'], config['beta2']))
         
         # Combine optimizers
         optimizer = CombinedOptimizer(euclidean_optimizer, stiefel_optimizer)
         
-        print(f"Using Stiefel optimizer for {len(stiefel_params)} Q,K weight matrices")
+        print(f"Using Stiefel optimizer for {len(stiefel_params_by_head)} Q,K weight matrices")
         print(f"Euclidean optimizer: {len(euclidean_decay_params)} decay params, {len(euclidean_nodecay_params)} no-decay params")
         print(f"Using fused AdamW for Euclidean params: {use_fused}")
 
