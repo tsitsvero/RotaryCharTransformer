@@ -133,9 +133,11 @@ def main():
         euclidean_decay_params = []
         euclidean_nodecay_params = []
 
+        last_layer_idx = model.config.n_layer - 1
+        
         for n, p in param_dict.items():
-            # Only Q and K weights should be on Stiefel manifold
-            if any(x in n for x in ['.q.weight', '.k.weight']):
+            # Only Q and K weights of the last layer should be on Stiefel manifold
+            if any(x in n for x in ['.q.weight', '.k.weight']) and f'h.{last_layer_idx}' in n:
                 # Reshape the weight matrix to separate heads
                 n_head = model.config.n_head
                 head_dim = model.config.n_embd // n_head
@@ -161,12 +163,11 @@ def main():
                 # Since we're handling this parameter through individual head parameters,
                 # don't include the original parameter in the optimizer
                 p.requires_grad_(False)
-                print(f"Added Stiefel parameters from layer: {n}, split into {n_head} heads")
+                print(f"Added Stiefel parameters from last layer: {n}, split into {n_head} heads")
             
-            # Regular weight matrices get weight decay
+            # All other parameters (including Q,K from other layers) use regular optimization
             elif p.dim() >= 2:
                 euclidean_decay_params.append(p)
-            # Biases and LayerNorm parameters don't get weight decay
             else:
                 euclidean_nodecay_params.append(p)
 
