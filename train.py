@@ -111,7 +111,7 @@ def main():
 
     model.to(device)
 
-    use_stiefel = config.get('use_stiefel', False)
+    use_stiefel = config.get('use_stiefel', True)
 
     if not use_stiefel:
 
