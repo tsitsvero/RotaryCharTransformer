@@ -140,21 +140,27 @@ def main():
                 n_head = model.config.n_head
                 head_dim = model.config.n_embd // n_head
                 
-                # Reshape to [n_head, head_dim, n_embd]
+                # Create a parameter for each head's portion of the weight matrix
                 p_reshaped = p.view(n_head, head_dim, -1)
                 
                 # Initialize each head's weights to be orthogonal
                 for head_idx in range(n_head):
                     torch.nn.init.orthogonal_(p_reshaped[head_idx])
-                
-                # Group parameters by head
-                for head_idx in range(n_head):
+                    
+                    # Create a new parameter for this head's portion
+                    head_param = p_reshaped[head_idx].clone().detach().requires_grad_(True)
+                    
                     stiefel_params_by_head.append({
-                        'params': [p],
+                        'params': [head_param],
                         'head_idx': head_idx,
                         'is_q': '.q.weight' in n,
+                        'layer_name': n,
                         'original_shape': p.shape
                     })
+                
+                # Since we're handling this parameter through individual head parameters,
+                # don't include the original parameter in the optimizer
+                p.requires_grad_(False)
                 print(f"Added Stiefel parameters from layer: {n}, split into {n_head} heads")
             
             # Regular weight matrices get weight decay
