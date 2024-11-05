@@ -25,6 +25,9 @@ from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 # Import HeadwiseStiefelAdam
 from headwise_stiefel_optimizer import HeadwiseStiefelAdam
 
+# Add this import at the top of the file
+import wandb
+
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
 
@@ -250,6 +253,19 @@ def main():
     local_iter_num = 0
     raw_model = model.module if ddp else model
 
+    # Initialize wandb
+    if master_process:
+        wandb.init(
+            project="transformer-stiefel",
+            config={
+                **config,
+                'model_type': config.get('model_type', 'baseline'),
+                'use_stiefel': use_stiefel,
+                'stiefel_last_layer_only': True,
+                'total_params': sum(p.numel() for p in model.parameters()),
+            }
+        )
+
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
             lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
@@ -317,6 +333,15 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                
+                # Log metrics to wandb
+                wandb.log({
+                    'iter': iter_num,
+                    'train/loss': losses['train'],
+                    'val/loss': losses['val'],
+                    'lr': lr,
+                })
+                
                 if losses['val'] < best_val_loss or config['always_save_checkpoint']:
                     best_val_loss = losses['val']
                     checkpoint = {
@@ -329,15 +354,27 @@ def main():
                     checkpoint_path = os.path.join(config['out_dir'], 'ckpt.pt')
                     torch.save(checkpoint, checkpoint_path)
                     print(f"Saved checkpoint to {checkpoint_path}")
+                    
+                    # Log best val loss to wandb
+                    wandb.log({'best_val_loss': best_val_loss})
 
             iter_num += 1
             local_iter_num += 1
             pbar.update(1)
 
             if iter_num % config['log_interval'] == 0 and master_process:
-              lossf = loss.item() * config['gradient_accumulation_steps']
-              print(f"Iter {iter_num}: loss {lossf:.4f}")
+                lossf = total_loss * config['gradient_accumulation_steps']
+                print(f"Iter {iter_num}: loss {lossf:.4f}")
+                
+                # Log training metrics
+                wandb.log({
+                    'iter': iter_num,
+                    'train/batch_loss': lossf,
+                    'lr': lr,
+                })
 
+    if master_process:
+        wandb.finish()
 
     if ddp:
         destroy_process_group()
