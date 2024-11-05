@@ -137,26 +137,12 @@ def main():
         euclidean_nodecay_params = []
 
         for n, p in param_dict.items():
-            # Apply Stiefel to all Q,K weights in attention layers
-            if any(x in n for x in ['.q.weight', '.k.weight']):
-                # Reshape the weight matrix to separate heads
-                n_head = model.config.n_head
-                head_dim = model.config.n_embd // n_head
-                n_embd = model.config.n_embd
-                
-                # Reshape to [n_head, head_dim, n_embd]
-                p_reshaped = p.view(n_head, head_dim, n_embd)
-                
-                # Initialize each head orthogonally and add to Stiefel params
-                for head_idx in range(n_head):
-                    head_param = p_reshaped[head_idx].clone().detach().requires_grad_(True)
-                    torch.nn.init.orthogonal_(head_param)
-                    stiefel_params.append(head_param)
-                
-                # Since we're handling this parameter through individual head parameters,
-                # don't include the original parameter in the optimizer
-                p.requires_grad_(False)
-                print(f"Added Stiefel parameters: {n}, split into {n_head} heads")
+            # Apply Stiefel to Q,K weights in attention layers
+            if any(x in n for x in ['attn.q.weight', 'attn.k.weight']):
+                # Initialize orthogonally and add to Stiefel params
+                torch.nn.init.orthogonal_(p)
+                stiefel_params.append(p)
+                print(f"Added Stiefel parameter: {n}, shape: {p.shape}")
             
             # All other parameters use regular optimization
             elif p.dim() >= 2:
