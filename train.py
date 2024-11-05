@@ -131,11 +131,9 @@ def main():
         euclidean_nodecay_params = []
 
         for n, p in param_dict.items():
-            # Q,K weights are in the c_attn layer of CausalSelfAttention
-            if 'c_attn.weight' in n:
-                # Initialize the full weight matrix to be orthogonal
-                torch.nn.init.orthogonal_(p)
-                # Add the entire weight matrix to Stiefel parameters
+            # Only Q and K weights should be on Stiefel manifold
+            if any(x in n for x in ['.q.weight', '.k.weight']):
+                torch.nn.init.orthogonal_(p)  # Initialize Q,K weights to be orthogonal
                 stiefel_params.append(p)
                 print(f"Added Stiefel parameters from layer: {n}")
             # Regular weight matrices get weight decay

@@ -200,7 +200,10 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # Split Q,K,V into separate linear layers
+        self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -209,17 +212,18 @@ class CausalSelfAttention(nn.Module):
         self.dropout = config.dropout
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
-
-        # Precompute rotary embeddings
         self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
 
     def forward(self, x):
         B, T, C = x.size()
-        qkv = self.c_attn(x).view(B, T, 3, self.n_head, C // self.n_head).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # Each is (B, n_head, T, head_dim)
+        
+        # Separate Q,K,V projections
+        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
         # Apply rotary embeddings to q and k
-        q, k = self.rotary_emb(q, k)  # Correcting this line
+        q, k = self.rotary_emb(q, k)
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
