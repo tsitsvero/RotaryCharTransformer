@@ -84,10 +84,18 @@ def main():
 
     def get_batch(split):
         data_path = os.path.join(data_dir, f'{split}.bin')
-        data = np.memmap(data_path, dtype=np.uint8, mode='r')
+        # Read raw bytes directly
+        with open(data_path, 'rb') as f:
+            data = f.read()
+        data = np.frombuffer(data, dtype=np.uint8)
+        
+        # Generate random indices
         ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
-        x = torch.stack([torch.from_numpy((data[i:i+config['block_size']]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+config['block_size']]).astype(np.int64)) for i in ix])
+        
+        # Create batches directly from bytes
+        x = torch.stack([torch.from_numpy(np.array(data[i:i+config['block_size']], dtype=np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy(np.array(data[i+1:i+1+config['block_size']], dtype=np.int64)) for i in ix])
+        
         if device_type == 'cuda':
             x = x.pin_memory().to(device, non_blocking=True)
             y = y.pin_memory().to(device, non_blocking=True)
@@ -478,14 +486,17 @@ def print_sample(model, x, y, config):
         pred = torch.argmax(probs, dim=-1)
     
     # Convert to characters and print
-    input_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in sample_x[:10].cpu().numpy()])
-    target_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in sample_y[:10].cpu().numpy()])
-    pred_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in pred[:10].cpu().numpy()])
+    def bytes_to_string(tensor):
+        return ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in tensor.cpu().numpy()])
+    
+    input_str = bytes_to_string(sample_x[:20])  # Show more context
+    target_str = bytes_to_string(sample_y[:20])
+    pred_str = bytes_to_string(pred[:20])
     
     print("\nRandom sample:")
-    print(f"Input (first 10):  {input_chars}")
-    print(f"Target (first 10): {target_chars}")
-    print(f"Pred (first 10):   {pred_chars}")
+    print(f"Input  (20 chars): {input_str}")
+    print(f"Target (20 chars): {target_str}")
+    print(f"Pred   (20 chars): {pred_str}")
 
 if __name__ == '__main__':
     main()
