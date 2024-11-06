@@ -94,7 +94,10 @@ class GPTWithRoPE(nn.Module):
         if targets is not None:
             # Calculate loss if targets are provided
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.long().view(-1), ignore_index=-1)
+            # Reshape logits and targets for loss calculation
+            logits = logits.reshape(-1, logits.size(-1))
+            targets = targets.reshape(-1)
+            loss = F.cross_entropy(logits, targets, ignore_index=-1)
         else:
             # For inference, only compute logits for the last position
             logits = self.lm_head(x[:, [-1], :])
