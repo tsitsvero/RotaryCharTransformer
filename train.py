@@ -98,8 +98,8 @@ def main():
     meta_path = os.path.join(data_dir, 'meta.pkl')
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
-    vocab_size = meta['vocab_size']
-    config['vocab_size'] = vocab_size
+    # vocab_size = meta['vocab_size']
+    config['vocab_size'] = 256#vocab_size
 
     gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout']
     gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
