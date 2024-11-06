@@ -1,7 +1,7 @@
 import math
 
 # Configuration for the modified model
-out_dir = 'out-enwik8-char-rope'
+out_dir = 'out'
 eval_interval = 500
 eval_iters = 200
 log_interval = 100
