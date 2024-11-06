@@ -37,7 +37,7 @@ warmup_iters = 100
 init_from = 'scratch'  # Initialize model from scratch
 
 use_rational = False  # Use Rational activation function
-use_stiefel = True  # Use Stiefel optimizer
+use_stiefel = False  # Use Stiefel optimizer
 
 # Use the modified model
 model_type = 'rope'
