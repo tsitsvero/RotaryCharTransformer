@@ -28,6 +28,9 @@ from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 # Add this import at the top of the file
 import wandb
 
+# Add these imports at the top
+import torch.nn.functional as F
+
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
 
@@ -340,6 +343,28 @@ def main():
 
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
+                
+                # Add orthogonality check for Stiefel matrices
+                if use_stiefel:
+                    ortho_error = compute_orthogonality_error(raw_model)
+                    print(f"Orthogonality error: {ortho_error:.6f}")
+                    
+                    # Log orthogonality error to wandb
+                    wandb.log({
+                        'iter': iter_num,
+                        'train/loss': losses['train'],
+                        'val/loss': losses['val'],
+                        'lr': lr,
+                        'orthogonality_error': ortho_error
+                    })
+                else:
+                    wandb.log({
+                        'iter': iter_num,
+                        'train/loss': losses['train'],
+                        'val/loss': losses['val'],
+                        'lr': lr,
+                    })
+                
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
                 
                 # Log metrics to wandb
@@ -386,6 +411,24 @@ def main():
 
     if ddp:
         destroy_process_group()
+
+@torch.no_grad()
+def compute_orthogonality_error(model):
+    """
+    Computes how far the Stiefel matrices are from being orthogonal.
+    Returns the mean deviation from orthogonality (should be close to 0).
+    """
+    errors = []
+    for name, param in model.named_parameters():
+        if any(x in name for x in ['3.attn.q.weight']): #['attn.q.weight', 'attn.k.weight']):
+            # For each Stiefel matrix W, compute ||W^T W - I||_F
+            W = param
+            WtW = W.T @ W
+            I = torch.eye(WtW.shape[0], device=WtW.device)
+            error = torch.norm(WtW - I, p='fro')
+            errors.append(error.item())
+    
+    return np.mean(errors) if errors else 0.0
 
 if __name__ == '__main__':
     main()

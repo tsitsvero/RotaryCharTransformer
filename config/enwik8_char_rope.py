@@ -24,10 +24,10 @@ dropout = 0.1  # Added some dropout for regularization
 bias = False  # No bias in LayerNorm and Linear layers
 
 # Optimization parameters
-learning_rate = 1e-3
+learning_rate = 6e-4
 max_iters = 5000  # Number of iterations for training
 lr_decay_iters = 5000
-min_lr = 1e-4
+min_lr = 6e-5
 beta1 = 0.9
 beta2 = 0.99 # set to 0.95 better
 weight_decay = 0.1
