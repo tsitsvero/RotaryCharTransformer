@@ -72,21 +72,22 @@ class GPTWithRoPE(nn.Module):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
-        # Token embeddings
-        tok_emb = self.transformer.wte(idx)  # shape (b, t, n_embd)
-
+        # Token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(idx)
+        
+        # Forward pass through transformer blocks
         x = self.transformer.drop(tok_emb)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
+            # Calculate loss if targets are provided
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
+            # For inference, only compute logits for the last position
+            logits = self.lm_head(x[:, [-1], :])
             loss = None
 
         return logits, loss
@@ -259,16 +260,26 @@ class RotaryEmbedding(nn.Module):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
+        self._seq_len_cached = None
+        self._cos_cached = None
+        self._sin_cached = None
+
+    def _update_cos_sin_tables(self, x, seq_len):
+        if seq_len != self._seq_len_cached:
+            self._seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+            freqs = torch.einsum('i,j->ij', t, self.inv_freq)
+            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
+            self._cos_cached = emb.cos()[None, None, :, :]
+            self._sin_cached = emb.sin()[None, None, :, :]
 
     def forward(self, q, k):
-        t = q.size(-2)
-        freqs = torch.einsum("i,j->ij", torch.arange(t, device=q.device).float(), self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()[None, None, :, :]
-        sin = emb.sin()[None, None, :, :]
-        q = apply_rotary_pos_emb(q, cos, sin)
-        k = apply_rotary_pos_emb(k, cos, sin)  # Fix the call for 'k'
-        return q, k
+        seq_len = q.shape[-2]
+        self._update_cos_sin_tables(q, seq_len)
+        return (
+            apply_rotary_pos_emb(q, self._cos_cached, self._sin_cached),
+            apply_rotary_pos_emb(k, self._cos_cached, self._sin_cached)
+        )
 
 
 class MLP(nn.Module):
