@@ -71,9 +71,10 @@ class GPTWithRoPE(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-
+        assert idx.max() < self.config.vocab_size, f"Input contains token {idx.max()} which is >= vocab size {self.config.vocab_size}"
+        
         # Token embeddings of shape (b, t, n_embd)
-        tok_emb = self.transformer.wte(idx)
+        tok_emb = self.transformer.wte(idx.long())  # Ensure long dtype for embeddings
         
         # Forward pass through transformer blocks
         x = self.transformer.drop(tok_emb)
@@ -84,7 +85,7 @@ class GPTWithRoPE(nn.Module):
         if targets is not None:
             # Calculate loss if targets are provided
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.long().view(-1), ignore_index=-1)
         else:
             # For inference, only compute logits for the last position
             logits = self.lm_head(x[:, [-1], :])

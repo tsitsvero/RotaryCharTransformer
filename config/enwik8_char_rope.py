@@ -1,6 +1,6 @@
 import math
 
-# Configuration for the enwik8 character-level model with RoPE
+# Configuration for the modified model
 out_dir = 'out-enwik8-char-rope'
 eval_interval = 500
 eval_iters = 200
@@ -13,14 +13,14 @@ wandb_run_name = 'gpt2-enwik8-char-rope'
 
 dataset = 'enwik8'
 gradient_accumulation_steps = 1
-batch_size = 64
-block_size = 256  # Increased context length for better modeling
+batch_size = 32  # Reduced batch size for stability
+block_size = 128  # Reduced context length
 
 # Model parameters
 n_layer = 6
 n_head = 8
 n_embd = 512
-dropout = 0.1
+dropout = 0.0  # Removed dropout initially for debugging
 bias = False
 
 # Optimization parameters
@@ -43,9 +43,8 @@ use_stiefel = True
 
 # System parameters
 device = 'cuda'
-dtype = 'float16'
+dtype = 'bfloat16'  # Changed to bfloat16 for better stability
 compile = False
-
 
 # Fixed vocab size for enwik8
 vocab_size = 256  # For byte-level encoding
