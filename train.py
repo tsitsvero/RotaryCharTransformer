@@ -344,26 +344,25 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
-                # Add orthogonality check for Stiefel matrices
-                if use_stiefel:
-                    ortho_error = compute_orthogonality_error(raw_model)
-                    print(f"Orthogonality error: {ortho_error:.6f}")
-                    
-                    # Log orthogonality error to wandb
-                    wandb.log({
-                        'iter': iter_num,
-                        'train/loss': losses['train'],
-                        'val/loss': losses['val'],
-                        'lr': lr,
-                        'orthogonality_error': ortho_error
-                    })
-                else:
-                    wandb.log({
-                        'iter': iter_num,
-                        'train/loss': losses['train'],
-                        'val/loss': losses['val'],
-                        'lr': lr,
-                    })
+                # Check orthogonality for all attention matrices
+                ortho_metrics = compute_orthogonality_error(raw_model)
+                print(f"\nOrthogonality errors:")
+                print(f"Stiefel matrices - mean: {ortho_metrics['stiefel_mean']:.6f}, "
+                      f"max: {ortho_metrics['stiefel_max'][1]:.6f} ({ortho_metrics['stiefel_max'][0]})")
+                print(f"Other matrices  - mean: {ortho_metrics['other_mean']:.6f}, "
+                      f"max: {ortho_metrics['other_max'][1]:.6f} ({ortho_metrics['other_max'][0]})")
+                
+                # Log metrics to wandb
+                wandb.log({
+                    'iter': iter_num,
+                    'train/loss': losses['train'],
+                    'val/loss': losses['val'],
+                    'lr': lr,
+                    'ortho/stiefel_mean': ortho_metrics['stiefel_mean'],
+                    'ortho/other_mean': ortho_metrics['other_mean'],
+                    'ortho/stiefel_max': ortho_metrics['stiefel_max'][1],
+                    'ortho/other_max': ortho_metrics['other_max'][1]
+                })
                 
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
                 
@@ -415,20 +414,44 @@ def main():
 @torch.no_grad()
 def compute_orthogonality_error(model):
     """
-    Computes how far the Stiefel matrices are from being orthogonal.
-    Returns the mean deviation from orthogonality (should be close to 0).
+    Computes how far matrices are from being orthogonal.
+    Returns separate mean deviations for Stiefel and non-Stiefel matrices.
     """
-    errors = []
-    for name, param in model.named_parameters():
-        if any(x in name for x in ['3.attn.q.weight']): #['attn.q.weight', 'attn.k.weight']):
-            # For each Stiefel matrix W, compute ||W^T W - I||_F
-            W = param
-            WtW = W.T @ W
-            I = torch.eye(WtW.shape[0], device=WtW.device)
-            error = torch.norm(WtW - I, p='fro')
-            errors.append(error.item())
+    stiefel_errors = []
+    other_attn_errors = []
     
-    return np.mean(errors) if errors else 0.0
+    for name, param in model.named_parameters():
+        if 'attn' in name and '.weight' in name:
+            # Compute orthogonality error for weight matrix
+            W = param
+            if W.shape[0] > W.shape[1]:  # Handle non-square matrices
+                WtW = W.T @ W
+                I = torch.eye(WtW.shape[0], device=WtW.device)
+            else:
+                WtW = W @ W.T
+                I = torch.eye(WtW.shape[0], device=WtW.device)
+            error = torch.norm(WtW - I, p='fro')
+            
+            # Separate Stiefel and non-Stiefel matrices
+            if any(x in name for x in ['3.attn.q.weight']):
+                stiefel_errors.append((name, error.item()))
+            else:
+                other_attn_errors.append((name, error.item()))
+    
+    # Calculate mean errors
+    stiefel_mean = np.mean([e[1] for e in stiefel_errors]) if stiefel_errors else 0.0
+    other_mean = np.mean([e[1] for e in other_attn_errors]) if other_attn_errors else 0.0
+    
+    # Get max errors with corresponding layer names
+    stiefel_max = max(stiefel_errors, key=lambda x: x[1]) if stiefel_errors else ('none', 0.0)
+    other_max = max(other_attn_errors, key=lambda x: x[1]) if other_attn_errors else ('none', 0.0)
+    
+    return {
+        'stiefel_mean': stiefel_mean,
+        'other_mean': other_mean,
+        'stiefel_max': stiefel_max,
+        'other_max': other_max
+    }
 
 if __name__ == '__main__':
     main()
