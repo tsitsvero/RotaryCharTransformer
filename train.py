@@ -348,9 +348,15 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
+                # Print random sample
+                print_sample(model, X, Y, config)
+                
+                # Print losses and other metrics
+                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                
                 # Check orthogonality for all attention matrices
                 ortho_metrics = compute_orthogonality_error(raw_model)
-                print(f"\nOrthogonality errors:")
+                print(f"Orthogonality errors:")
                 print(f"Stiefel matrices - mean: {ortho_metrics['stiefel_mean']:.6f}, "
                       f"max: {ortho_metrics['stiefel_max'][1]:.6f} ({ortho_metrics['stiefel_max'][0]})")
                 print(f"Other matrices  - mean: {ortho_metrics['other_mean']:.6f}, "
@@ -456,6 +462,30 @@ def compute_orthogonality_error(model):
         'stiefel_max': stiefel_max,
         'other_max': other_max
     }
+
+# Add this function after get_batch
+def print_sample(model, x, y, config):
+    """Print a random sample from the batch with its prediction"""
+    # Select random sample from batch
+    idx = torch.randint(0, x.shape[0], (1,)).item()
+    sample_x = x[idx]
+    sample_y = y[idx]
+    
+    # Get model prediction
+    with torch.no_grad():
+        logits, _ = model(sample_x.unsqueeze(0))
+        probs = F.softmax(logits[0], dim=-1)
+        pred = torch.argmax(probs, dim=-1)
+    
+    # Convert to characters and print
+    input_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in sample_x[:10].cpu().numpy()])
+    target_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in sample_y[:10].cpu().numpy()])
+    pred_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in pred[:10].cpu().numpy()])
+    
+    print("\nRandom sample:")
+    print(f"Input (first 10):  {input_chars}")
+    print(f"Target (first 10): {target_chars}")
+    print(f"Pred (first 10):   {pred_chars}")
 
 if __name__ == '__main__':
     main()
