@@ -8,15 +8,22 @@ from model_rope import GPTWithRoPE
 
 def evaluate(model, data_loader, device):
     model.eval()
-    losses = []
+    total_loss = 0
+    total_tokens = 0
     with torch.no_grad():
         for x, y in data_loader:
             x = x.to(device)
             y = y.to(device)
             with torch.amp.autocast(device_type=device):
                 logits, loss = model(x, y)
-            losses.append(loss.item())
-    return np.mean(losses)
+                # Accumulate the total loss and count of tokens
+                total_loss += loss.item() * y.numel()  # Multiply by batch tokens
+                total_tokens += y.numel()
+    
+    # Calculate average loss and bpc
+    avg_loss = total_loss / total_tokens
+    bpc = avg_loss / math.log(2)  # Convert from nats to bits
+    return avg_loss, bpc
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -88,6 +95,6 @@ if __name__ == '__main__':
     )
 
     # Evaluate
-    val_loss = evaluate(model, val_loader, device)
-    bpc = val_loss / math.log(2)
-    print(f"Validation Loss: {val_loss:.4f}, Bits per character (bpc): {bpc:.4f}")
+    val_loss, bpc = evaluate(model, val_loader, device)
+    print(f"Validation Loss: {val_loss:.4f}")
+    print(f"Bits per character (bpc): {bpc:.4f}")
