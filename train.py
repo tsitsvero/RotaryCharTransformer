@@ -84,7 +84,7 @@ def main():
 
     def get_batch(split):
         data_path = os.path.join(data_dir, f'{split}.bin')
-        data = np.memmap(data_path, dtype=np.uint16, mode='r')
+        data = np.memmap(data_path, dtype=np.uint8, mode='r')
         ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
         x = torch.stack([torch.from_numpy((data[i:i+config['block_size']]).astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy((data[i+1:i+1+config['block_size']]).astype(np.int64)) for i in ix])
@@ -96,10 +96,14 @@ def main():
         return x, y
 
     meta_path = os.path.join(data_dir, 'meta.pkl')
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    # vocab_size = meta['vocab_size']
-    config['vocab_size'] = 256#vocab_size
+    if os.path.exists(meta_path):
+        with open(meta_path, 'rb') as f:
+            meta = pickle.load(f)
+        # vocab_size = meta['vocab_size']
+    else:
+        meta = {'vocab_size': 256}  # Default for byte encoding
+
+    config['vocab_size'] = 256  # Force vocab size to 256 for byte-level encoding
 
     gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout']
     gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
