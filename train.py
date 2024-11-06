@@ -47,6 +47,32 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
     print(data.decode('utf-8', errors='replace'))
     print("=" * 80)
 
+def print_sample(model, device, prompt="hello ", max_new_tokens=100):
+    """Generate and print a sample from the model"""
+    model.eval()
+    
+    # Convert prompt to bytes and create input tensor
+    input_bytes = [ord(c) for c in prompt]
+    input_tensor = torch.tensor(input_bytes, dtype=torch.long)[None, ...].to(device)
+    
+    with torch.no_grad():
+        # Generate with temperature = 0.8
+        output_ids = model.generate(
+            input_tensor,
+            max_new_tokens=max_new_tokens,
+            temperature=0.8,
+            top_k=40
+        )
+    
+    # Convert output back to text
+    generated_text = bytes(output_ids[0].cpu().tolist()).decode('utf-8', errors='replace')
+    print("\nSample generation:")
+    print("=" * 40)
+    print(generated_text)
+    print("=" * 40)
+    
+    model.train()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
@@ -385,8 +411,8 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
-                # Print random sample
-                print_sample(model, X, Y, config)
+                # Generate and print sample text
+                print_sample(raw_model, device)
                 
                 # Print losses and other metrics
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['valid']:.4f}")
