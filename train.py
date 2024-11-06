@@ -34,6 +34,25 @@ import torch.nn.functional as F
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
 
+def print_dataset_sample(data_dir, split='train', n_chars=1000):
+    """Print first n_chars of the dataset"""
+    data_path = os.path.join(data_dir, f'{split}.bin')
+    with open(data_path, 'rb') as f:
+        data = f.read(n_chars)
+    
+    # Convert bytes to string, handling non-printable characters
+    text = ''
+    for b in data:
+        if 32 <= b <= 126:  # Printable ASCII
+            text += chr(b)
+        else:
+            text += f'<{b}>'
+    
+    print(f"\nFirst {n_chars} characters of {split} dataset:")
+    print("=" * 80)
+    print(text)
+    print("=" * 80)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
@@ -81,6 +100,8 @@ def main():
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
     data_dir = os.path.join('data', config['dataset'])
+
+    print_dataset_sample(data_dir)
 
     def get_batch(split):
         data_path = os.path.join(data_dir, f'{split}.bin')
