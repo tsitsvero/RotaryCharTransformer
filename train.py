@@ -96,10 +96,21 @@ def load_data_to_gpu(data_dir, device):
     return data_dict
 
 def get_batch_from_memory(data_tensor, block_size, batch_size, device):
-    """Get a batch of data from pre-loaded tensor"""
+    """Get a batch of data from pre-loaded tensor - optimized version"""
+    # Generate all indices at once on GPU
     ix = torch.randint(len(data_tensor) - block_size, (batch_size,), device=device)
-    x = torch.stack([data_tensor[i:i+block_size] for i in ix])
-    y = torch.stack([data_tensor[i+1:i+1+block_size] for i in ix])
+    
+    # Use index_select for faster gathering
+    x = torch.stack([
+        torch.index_select(data_tensor, 0, ix + i) 
+        for i in range(block_size)
+    ]).t()
+    
+    y = torch.stack([
+        torch.index_select(data_tensor, 0, ix + i + 1)
+        for i in range(block_size)
+    ]).t()
+    
     return x, y
 
 def main():

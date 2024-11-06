@@ -12,7 +12,7 @@ wandb_project = 'enwik8-char'
 wandb_run_name = 'gpt2-enwik8-char-rope'
 
 dataset = 'enwik8'
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 8
 batch_size = 64  # Reduced batch size for stability
 block_size = 256  # Reduced context length
 
