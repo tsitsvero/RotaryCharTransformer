@@ -94,9 +94,12 @@ class GPTWithRoPE(nn.Module):
         if targets is not None:
             # Calculate loss if targets are provided
             logits = self.lm_head(x)
-            # Reshape logits and targets for loss calculation
-            logits = logits.reshape(-1, logits.size(-1))
-            targets = targets.reshape(-1)
+            # Make tensors contiguous before view operation
+            logits = logits.contiguous()
+            targets = targets.contiguous()
+            # Use view for better performance
+            logits = logits.view(-1, logits.size(-1))
+            targets = targets.view(-1)
             loss = F.cross_entropy(logits, targets, ignore_index=-1)
         else:
             # For inference, only compute logits for the last position
