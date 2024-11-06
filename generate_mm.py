@@ -3,6 +3,7 @@ import torch
 import argparse
 from model import GPT, GPTConfig
 from model_rope import GPTWithRoPE
+from torch.nn import functional as F
 
 def encode_string(s):
     """Convert string to list of byte values"""
@@ -11,6 +12,37 @@ def encode_string(s):
 def decode_bytes(b):
     """Convert list of byte values back to string"""
     return bytes(b).decode('utf-8', errors='replace')
+
+def get_next_token(logits, temperature=1.0, top_k=None):
+    """Helper function to sample from the model's output distribution"""
+    logits = logits[:, -1, :] / temperature
+    if top_k is not None:
+        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+        logits[logits < v[:, [-1]]] = -float('Inf')
+    probs = F.softmax(logits, dim=-1)
+    next_token = torch.multinomial(probs, num_samples=1)
+    return next_token
+
+class BaseGPTMixin:
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """Generate tokens using the model"""
+        for _ in range(max_new_tokens):
+            # crop idx to the last block_size tokens if needed
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # get model predictions
+            logits = self(idx_cond)
+            # sample from the distribution
+            next_token = get_next_token(logits, temperature, top_k)
+            # append sampled token to the sequence
+            idx = torch.cat((idx, next_token), dim=1)
+        return idx
+
+# Modify the model classes to include generation capability
+class GPT(BaseGPTMixin, GPT):
+    pass
+
+class GPTWithRoPE(BaseGPTMixin, GPTWithRoPE):
+    pass
 
 def main():
     # Parse command line arguments
