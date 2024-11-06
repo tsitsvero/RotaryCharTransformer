@@ -7,6 +7,8 @@ import inspect
 from dataclasses import dataclass
 from rational import Rational
 
+from torch.nn import LayerNorm
+
 
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
@@ -36,7 +38,7 @@ class GPTWithRoPE(nn.Module):
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd)
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
@@ -53,6 +55,7 @@ class GPTWithRoPE(nn.Module):
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
+        For non-embedding count (default), the position embeddings get subtracted.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -70,14 +73,20 @@ class GPTWithRoPE(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
+        
+        # Assert the input dimensions
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        assert idx.max() < self.config.vocab_size, f"Input contains token {idx.max()} which is >= vocab size {self.config.vocab_size}"
+        
+        # Forward the GPT model itself
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
         
         # Token embeddings of shape (b, t, n_embd)
-        tok_emb = self.transformer.wte(idx.long())  # Ensure long dtype for embeddings
+        tok_emb = self.transformer.wte(idx)
         
-        # Forward pass through transformer blocks
+        # Add positional embeddings (RoPE is applied in the attention layers)
         x = self.transformer.drop(tok_emb)
+        
+        # Apply transformer blocks
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
