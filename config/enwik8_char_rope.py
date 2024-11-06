@@ -13,14 +13,14 @@ wandb_run_name = 'gpt2-enwik8-char-rope'
 
 dataset = 'enwik8'
 gradient_accumulation_steps = 1
-batch_size = 32  # Reduced batch size for stability
-block_size = 128  # Reduced context length
+batch_size = 64  # Reduced batch size for stability
+block_size = 512  # Reduced context length
 
 # Model parameters
-n_layer = 6
+n_layer = 8
 n_head = 8
 n_embd = 512
-dropout = 0.0  # Removed dropout initially for debugging
+dropout = 0.1  # Removed dropout initially for debugging
 bias = False
 
 # Optimization parameters
