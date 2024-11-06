@@ -138,7 +138,7 @@ def main():
 
         for n, p in param_dict.items():
             # Apply Stiefel to Q,K weights in attention layers
-            if any(x in n for x in ['0.attn.q.weight']):#['attn.q.weight', 'attn.k.weight']): #['0.attn.k.weight']): 
+            if any(x in n for x in ['7.attn.q.weight', '7.attn.k.weight']): #['0.attn.q.weight']): 
                 # Initialize orthogonally and add to Stiefel params
                 # torch.nn.init.orthogonal_(p)
                 stiefel_params.append(p)
