@@ -16,11 +16,9 @@ def evaluate(model, data_loader, device):
             y = y.to(device)
             with torch.amp.autocast(device_type=device):
                 logits, loss = model(x, y)
-                # Accumulate the total loss and count of tokens
-                total_loss += loss.item() * y.numel()  # Multiply by batch tokens
+                total_loss += loss.item() * y.numel()
                 total_tokens += y.numel()
     
-    # Calculate average loss and bpc
     avg_loss = total_loss / total_tokens
     bpc = avg_loss / math.log(2)  # Convert from nats to bits
     return avg_loss, bpc
@@ -34,16 +32,14 @@ if __name__ == '__main__':
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # Load the checkpoint
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    # Load the checkpoint with weights_only=True for security
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
 
     # Load the model configuration from the checkpoint
     ckpt_config = checkpoint['config']
 
-    # Update vocab_size from the dataset's meta.pkl
-    with open(f"data/{args.dataset}/meta.pkl", 'rb') as f:
-        meta = pickle.load(f)
-    vocab_size = meta['vocab_size']
+    # Force vocab_size to 256 for byte-level encoding
+    vocab_size = 256
     ckpt_config['vocab_size'] = vocab_size
 
     # Filter ckpt_config to only include keys that GPTConfig accepts
@@ -62,15 +58,15 @@ if __name__ == '__main__':
         print("Using BaselineGPT model.")
 
     # Load the model state
-    model.load_state_dict(checkpoint['model'], strict=False)
+    model.load_state_dict(checkpoint['model'])
     model.to(device)
 
     # Prepare data loader
     block_size = ckpt_config['block_size']
-    batch_size = ckpt_config.get('batch_size', 64)  # Default to 64 if not specified
+    batch_size = ckpt_config.get('batch_size', 64)
 
     # Load validation data
-    val_data = np.memmap(f'data/{args.dataset}/val.bin', dtype=np.uint16, mode='r')
+    val_data = np.memmap(f'data/{args.dataset}/val.bin', dtype=np.uint8, mode='r')  # Changed to uint8
     val_data = torch.from_numpy(val_data.astype(np.int64))
 
     # Create sequences of block_size
