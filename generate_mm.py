@@ -2,6 +2,7 @@ import os
 import torch
 import argparse
 from model import GPT, GPTConfig
+from model_rope import GPTWithRoPE
 
 def encode_string(s):
     """Convert string to list of byte values"""
@@ -23,31 +24,38 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    # Initialize model configuration
-    config = GPTConfig(
-        block_size=256,        # Smaller context for demonstration
-        vocab_size=256,        # Use 256 for byte-level encoding
-        n_layer=12,            # 12 transformer blocks
-        n_head=12,            # 12 attention heads
-        n_embd=768,           # 768 embedding dimension
-        use_rational=True,     # Use Rational activation function
-    )
+    # Load the checkpoint with weights_only=True for security
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    
+    # Get configuration from checkpoint
+    ckpt_config = checkpoint['config']
+    
+    # Force vocab_size to 256 for byte-level encoding
+    ckpt_config['vocab_size'] = 256
+    
+    # Filter config to only include keys that GPTConfig accepts
+    valid_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout']
+    model_config_kwargs = {k: ckpt_config[k] for k in valid_config_keys if k in ckpt_config}
+    
+    # Create model configuration
+    config = GPTConfig(**model_config_kwargs)
 
-    # Create model
-    model = GPT(config)
+    # Create appropriate model based on checkpoint type
+    if ckpt_config.get('model_type') == 'rope':
+        model = GPTWithRoPE(config)
+        print("Using GPTWithRoPE model")
+    else:
+        model = GPT(config)
+        print("Using GPT model")
+        
     model.to(device)
     
     # Set model to evaluation mode
     model.eval()
 
-    # Load the checkpoint
-    if os.path.exists(args.checkpoint):
-        checkpoint = torch.load(args.checkpoint, map_location=device)
-        # Load the model state dict
-        model.load_state_dict(checkpoint['model'])
-        print(f"Loaded checkpoint from {args.checkpoint}")
-    else:
-        print(f"Warning: No checkpoint found at {args.checkpoint}. Using random initialization")
+    # Load the model state
+    model.load_state_dict(checkpoint['model'])
+    print(f"Loaded checkpoint from {args.checkpoint}")
 
     # Convert prompt to byte values and create tensor
     input_bytes = encode_string(args.prompt)
