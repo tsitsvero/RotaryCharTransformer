@@ -40,13 +40,8 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
     with open(data_path, 'rb') as f:
         data = f.read(n_chars)
     
-    # Convert bytes to string, handling non-printable characters
-    text = ''
-    for b in data:
-        if 32 <= b <= 126:  # Printable ASCII
-            text += chr(b)
-        else:
-            text += f'<{b}>'
+    # Convert bytes to string directly
+    text = data.decode('utf-8', errors='replace')
     
     print(f"\nFirst {n_chars} characters of {split} dataset:")
     print("=" * 80)
@@ -506,11 +501,12 @@ def print_sample(model, x, y, config):
         probs = F.softmax(logits[0], dim=-1)
         pred = torch.argmax(probs, dim=-1)
     
-    # Convert to characters and print
+    # Convert to string directly
     def bytes_to_string(tensor):
-        return ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in tensor.cpu().numpy()])
+        bytes_data = tensor.cpu().numpy().astype(np.uint8).tobytes()
+        return bytes_data.decode('utf-8', errors='replace')
     
-    input_str = bytes_to_string(sample_x[:20])  # Show more context
+    input_str = bytes_to_string(sample_x[:20])
     target_str = bytes_to_string(sample_y[:20])
     pred_str = bytes_to_string(pred[:20])
     
