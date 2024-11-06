@@ -1,5 +1,6 @@
 import os
 import torch
+import argparse
 from model import GPT, GPTConfig
 
 def encode_string(s):
@@ -11,6 +12,13 @@ def decode_bytes(b):
     return bytes(b).decode('utf-8', errors='replace')
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Generate text from a prompt')
+    parser.add_argument('--prompt', type=str, required=True, help='Input prompt for generation')
+    parser.add_argument('--checkpoint', type=str, default='out/ckpt.pt', help='Path to model checkpoint')
+    parser.add_argument('--max_new_tokens', type=int, default=200, help='Maximum number of tokens to generate')
+    args = parser.parse_args()
+
     # Initialize device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
@@ -33,28 +41,24 @@ def main():
     model.eval()
 
     # Load the checkpoint
-    ckpt_path = 'out/ckpt.pt'  # Default checkpoint path
-    if os.path.exists(ckpt_path):
-        checkpoint = torch.load(ckpt_path, map_location=device)
+    if os.path.exists(args.checkpoint):
+        checkpoint = torch.load(args.checkpoint, map_location=device)
         # Load the model state dict
         model.load_state_dict(checkpoint['model'])
-        print(f"Loaded checkpoint from {ckpt_path}")
+        print(f"Loaded checkpoint from {args.checkpoint}")
     else:
-        print("Warning: No checkpoint found. Using random initialization")
+        print(f"Warning: No checkpoint found at {args.checkpoint}. Using random initialization")
 
-    # Input prompt
-    prompt = "historia de "
-    
     # Convert prompt to byte values and create tensor
-    input_bytes = encode_string(prompt)
+    input_bytes = encode_string(args.prompt)
     input_tensor = torch.tensor(input_bytes, dtype=torch.long)[None, ...].to(device)
     
     # Generate text
-    print("\nPrompt:", prompt)
+    print("\nPrompt:", args.prompt)
     print("\nGenerating with temperature = 0.8:")
     
     # Generation parameters
-    max_new_tokens = 200  
+    max_new_tokens = args.max_new_tokens
     temperature = 0.8    
     top_k = 40          
     
