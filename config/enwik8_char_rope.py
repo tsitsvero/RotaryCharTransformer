@@ -14,7 +14,7 @@ wandb_run_name = 'gpt2-enwik8-char-rope'
 dataset = 'enwik8'
 gradient_accumulation_steps = 1
 batch_size = 64  # Adjust based on your GPU memory
-block_size = 256  # Context length
+block_size = 512  # Context length
 
 # Model parameters
 n_layer = 8
