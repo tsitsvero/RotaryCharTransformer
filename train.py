@@ -478,9 +478,9 @@ def print_sample(model, x, y, config):
         pred = torch.argmax(probs, dim=-1)
     
     # Convert to characters and print
-    input_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in sample_x[:10].cpu().numpy()])
-    target_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in sample_y[:10].cpu().numpy()])
-    pred_chars = ''.join([chr(i) if 32 <= i <= 126 else f'<{i}>' for i in pred[:10].cpu().numpy()])
+    input_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in sample_x[:10].cpu().numpy()])
+    target_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in sample_y[:10].cpu().numpy()])
+    pred_chars = ''.join([chr(i) if 32 <= i <= 126 else str(i) for i in pred[:10].cpu().numpy()])
     
     print("\nRandom sample:")
     print(f"Input (first 10):  {input_chars}")
