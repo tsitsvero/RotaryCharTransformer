@@ -411,8 +411,11 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
+                # Get a batch for sampling
+                sample_x, sample_y = get_batch('train')
+                
                 # Generate and print sample text
-                print_sample(raw_model, device)
+                print_sample(raw_model, sample_x, sample_y, config)
                 
                 # Print losses and other metrics
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['valid']:.4f}")
