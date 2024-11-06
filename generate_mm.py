@@ -2,6 +2,14 @@ import os
 import torch
 from model import GPT, GPTConfig
 
+def encode_string(s):
+    """Convert string to list of byte values"""
+    return [ord(c) for c in s]
+
+def decode_bytes(b):
+    """Convert list of byte values back to string"""
+    return bytes(b).decode('utf-8', errors='replace')
+
 def main():
     # Initialize device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -10,7 +18,7 @@ def main():
     # Initialize model configuration
     config = GPTConfig(
         block_size=256,        # Smaller context for demonstration
-        vocab_size=50304,      # Standard GPT-2 vocabulary
+        vocab_size=256,        # Use 256 for byte-level encoding
         n_layer=12,            # 12 transformer blocks
         n_head=12,            # 12 attention heads
         n_embd=768,           # 768 embedding dimension
@@ -32,69 +40,60 @@ def main():
         model.load_state_dict(checkpoint['model'])
         print(f"Loaded checkpoint from {ckpt_path}")
     else:
-        # Fallback to pretrained GPT-2 if no checkpoint found
-        try:
-            model = GPT.from_pretrained('gpt2')
-            print("Loaded pretrained GPT-2 weights")
-        except:
-            print("Warning: No checkpoint found and couldn't load pretrained weights")
-            print("Using random initialization")
+        print("Warning: No checkpoint found. Using random initialization")
 
-    # Example prompt
-    prompt = "Once upon a time"
+    # Input prompt
+    prompt = "historia de "
     
-    # Initialize tokenizer
-    from transformers import GPT2Tokenizer
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-    
-    # Tokenize input
-    input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+    # Convert prompt to byte values and create tensor
+    input_bytes = encode_string(prompt)
+    input_tensor = torch.tensor(input_bytes, dtype=torch.long)[None, ...].to(device)
     
     # Generate text
     print("\nPrompt:", prompt)
     print("\nGenerating with temperature = 0.8:")
     
     # Generation parameters
-    max_new_tokens = 100  # Increased length for more context
+    max_new_tokens = 200  
     temperature = 0.8    
     top_k = 40          
     
     with torch.no_grad():
         output_ids = model.generate(
-            input_ids, 
+            input_tensor, 
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k
         )
     
     # Decode and print the generated text
-    generated_text = tokenizer.decode(output_ids[0])
+    generated_text = decode_bytes(output_ids[0].cpu().tolist())
     print(generated_text)
 
     # Generate with different temperature
     print("\nGenerating with temperature = 1.2 (more random):")
     with torch.no_grad():
         output_ids = model.generate(
-            input_ids, 
+            input_tensor, 
             max_new_tokens=max_new_tokens,
             temperature=1.2,
             top_k=top_k
         )
     
-    generated_text = tokenizer.decode(output_ids[0])
+    generated_text = decode_bytes(output_ids[0].cpu().tolist())
     print(generated_text)
 
     # Generate with lower temperature
     print("\nGenerating with temperature = 0.5 (more focused):")
     with torch.no_grad():
         output_ids = model.generate(
-            input_ids, 
+            input_tensor, 
             max_new_tokens=max_new_tokens,
             temperature=0.5,
             top_k=top_k
         )
     
-    generated_text = tokenizer.decode(output_ids[0])
+    generated_text = decode_bytes(output_ids[0].cpu().tolist())
     print(generated_text)
 
 if __name__ == '__main__':
