@@ -390,6 +390,10 @@ def main():
             fwd_bwd_time = time.time() - fwd_bwd_start
             timer.log('forward_backward', fwd_bwd_time)
             
+            # Define closure for the Stiefel optimizer
+            def closure():
+                return total_loss
+
             # Time optimizer step
             opt_start = time.time()
             
@@ -398,7 +402,7 @@ def main():
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    scaler.step(optimizer, closure)
+                    scaler.step(optimizer, closure)  # Pass the closure here
                 else:
                     scaler.step(optimizer)
                 scaler.update()
@@ -406,7 +410,7 @@ def main():
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    optimizer.step(closure)
+                    optimizer.step(closure)  # Pass the closure here
                 else:
                     optimizer.step()
             
