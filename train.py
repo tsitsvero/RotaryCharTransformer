@@ -78,6 +78,8 @@ def get_batch(split, data_dir, config, device, device_type):
     """Get a random batch of data from txt file"""
     start_time = time.time()
     
+    # Time file reading
+    io_start = time.time()
     data_path = os.path.join(data_dir, f'{split}.txt')
     
     if not os.path.exists(data_path):
@@ -86,29 +88,39 @@ def get_batch(split, data_dir, config, device, device_type):
     # Read the entire file
     with open(data_path, 'rb') as f:
         data = f.read()
+    io_time = time.time() - io_start
     
-    if split == 'train' and not hasattr(get_batch, 'printed_stats'):
-        print("\nData statistics:")
-        print(f"Total length: {len(data)} bytes")
-        print(f"Unique values: {len(set(data))}")
-        print(f"Sample of raw bytes: {list(data[:50])}")
-        get_batch.printed_stats = True
-    
-    # Generate random indices
+    # Time tensor creation
+    tensor_start = time.time()
     ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
-    
-    # Create batches directly from bytes
     x = torch.stack([torch.tensor([int(b) for b in data[i:i+config['block_size']]]) for i in ix])
     y = torch.stack([torch.tensor([int(b) for b in data[i+1:i+1+config['block_size']]]) for i in ix])
+    tensor_time = time.time() - tensor_start
     
+    # Time device transfer
+    transfer_start = time.time()
     if device_type == 'cuda':
         x = x.pin_memory().to(device, non_blocking=True)
         y = y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
+    transfer_time = time.time() - transfer_start
     
-    duration = time.time() - start_time
-    timer.log('get_batch', duration)
+    total_duration = time.time() - start_time
+    
+    # Log detailed timing
+    timer.log('get_batch_total', total_duration)
+    timer.log('get_batch_io', io_time)
+    timer.log('get_batch_tensor', tensor_time)
+    timer.log('get_batch_transfer', transfer_time)
+    
+    if split == 'train' and not hasattr(get_batch, 'timing_printed'):
+        print("\nget_batch timing breakdown:")
+        print(f"I/O time:        {io_time*1000:.2f}ms")
+        print(f"Tensor creation: {tensor_time*1000:.2f}ms")
+        print(f"Device transfer: {transfer_time*1000:.2f}ms")
+        print(f"Total time:      {total_duration*1000:.2f}ms")
+        get_batch.timing_printed = True
     
     return x, y
 
