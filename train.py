@@ -125,18 +125,18 @@ def main():
 
     # Add this after data_dir initialization but before the training loop
     def load_data(data_dir):
-        """Load train and validation data into memory"""
+        """Load train and validation data into memory more efficiently"""
         data_dict = {}
         for split in ['train', 'valid']:
             data_path = os.path.join(data_dir, f'{split}.txt')
             if not os.path.exists(data_path):
                 raise FileNotFoundError(f"Data file not found: {data_path}")
             
-            with open(data_path, 'rb') as f:
-                data = f.read()
+            # Use memory mapping for large files
+            data = np.memmap(data_path, dtype=np.uint8, mode='r')
             
-            # Convert to tensor and move to device, ensure long dtype
-            data_tensor = torch.frombuffer(data, dtype=torch.uint8).long()  # Convert to long
+            # Convert to tensor more efficiently
+            data_tensor = torch.from_numpy(data.astype(np.int64))
             if device_type == 'cuda':
                 data_tensor = data_tensor.pin_memory().to(device, non_blocking=True)
             else:
@@ -144,13 +144,6 @@ def main():
                 
             data_dict[split] = data_tensor
             
-            if split == 'train':
-                print("\nData statistics:")
-                print(f"Total length: {len(data)} bytes")
-                print(f"Unique values: {len(set(data))}")
-                print(f"Sample of raw bytes: {list(data[:50])}")
-                print(f"Max value in tensor: {data_tensor.max().item()}")
-        
         return data_dict
 
     # Load all data into memory
@@ -160,11 +153,11 @@ def main():
 
     # Modify get_batch to use the preloaded data
     def get_batch(split):
-        """Get a random batch from preloaded data"""
+        """Get a random batch more efficiently"""
         data = data_tensors[split]
         ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],), device=device)
         
-        # Data is already in long format from load_data
+        # Use advanced indexing for better performance
         x = torch.stack([data[i:i+config['block_size']] for i in ix])
         y = torch.stack([data[i+1:i+1+config['block_size']] for i in ix])
         
@@ -362,57 +355,47 @@ def main():
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
+            # Zero gradients once for all micro-batches
             optimizer.zero_grad(set_to_none=True)
+            
+            # Pre-fetch batches for all micro-steps
+            batches = [(get_batch('train')) for _ in range(config['gradient_accumulation_steps'])]
+            
             total_loss = 0.0
-
+            
             # Accumulate gradients
-            for micro_step in range(config['gradient_accumulation_steps']):
+            for micro_step, (X, Y) in enumerate(batches):
                 if ddp:
                     model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
                 
-                # Forward pass
+                # Forward pass with automatic mixed precision
                 with ctx:
                     logits, loss = model(X, Y)
                     loss = loss / config['gradient_accumulation_steps']
                 
-                # Backward pass with scaling if needed
+                # Backward pass
                 if scaler is not None:
                     scaler.scale(loss).backward()
                 else:
                     loss.backward()
                     
                 total_loss += loss.item()
-                X, Y = get_batch('train')  # Get next batch
-            
-            # Define closure for the Stiefel optimizer
-            if use_stiefel:
-                def closure():
-                    return total_loss
 
-            # Handle gradient clipping and optimization step
+            # Optimization step
             if scaler is not None:
-                # First unscale the gradients
                 scaler.unscale_(optimizer)
-                
-                # Clip gradients if needed
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-                
-                # Step with closure for Stiefel optimizer
                 if use_stiefel:
-                    scaler.step(optimizer, closure)
+                    scaler.step(optimizer, lambda: total_loss)
                 else:
                     scaler.step(optimizer)
-                    
                 scaler.update()
             else:
-                # Clip gradients if needed
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-                
-                # Step with closure for Stiefel optimizer
                 if use_stiefel:
-                    optimizer.step(closure)
+                    optimizer.step(lambda: total_loss)
                 else:
                     optimizer.step()
 
