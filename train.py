@@ -71,6 +71,47 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
     print(data.decode('utf-8', errors='replace'))
     print("=" * 80)
 
+# Move timer initialization before get_batch definition
+timer = Timer()
+
+def get_batch(split):
+    """Get a random batch of data from txt file"""
+    start_time = time.time()
+    
+    data_path = os.path.join(data_dir, f'{split}.txt')
+    
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"Data file not found: {data_path}")
+    
+    # Read the entire file
+    with open(data_path, 'rb') as f:
+        data = f.read()
+    
+    if split == 'train' and not hasattr(get_batch, 'printed_stats'):
+        print("\nData statistics:")
+        print(f"Total length: {len(data)} bytes")
+        print(f"Unique values: {len(set(data))}")
+        print(f"Sample of raw bytes: {list(data[:50])}")
+        get_batch.printed_stats = True
+    
+    # Generate random indices
+    ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
+    
+    # Create batches directly from bytes
+    x = torch.stack([torch.tensor([int(b) for b in data[i:i+config['block_size']]]) for i in ix])
+    y = torch.stack([torch.tensor([int(b) for b in data[i+1:i+1+config['block_size']]]) for i in ix])
+    
+    if device_type == 'cuda':
+        x = x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    
+    duration = time.time() - start_time
+    timer.log('get_batch', duration)
+    
+    return x, y
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
@@ -119,45 +160,10 @@ def main():
 
     data_dir = os.path.join('data', config['dataset'])
 
-    print_dataset_sample(data_dir)
+    # Initialize timer here
+    timer = Timer()
 
-    def get_batch(split):
-        """Get a random batch of data from txt file"""
-        start_time = time.time()
-        
-        data_path = os.path.join(data_dir, f'{split}.txt')
-        
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found: {data_path}")
-        
-        # Read the entire file
-        with open(data_path, 'rb') as f:
-            data = f.read()
-        
-        if split == 'train' and not hasattr(get_batch, 'printed_stats'):
-            print("\nData statistics:")
-            print(f"Total length: {len(data)} bytes")
-            print(f"Unique values: {len(set(data))}")
-            print(f"Sample of raw bytes: {list(data[:50])}")
-            get_batch.printed_stats = True
-        
-        # Generate random indices
-        ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
-        
-        # Create batches directly from bytes
-        x = torch.stack([torch.tensor([int(b) for b in data[i:i+config['block_size']]]) for i in ix])
-        y = torch.stack([torch.tensor([int(b) for b in data[i+1:i+1+config['block_size']]]) for i in ix])
-        
-        if device_type == 'cuda':
-            x = x.pin_memory().to(device, non_blocking=True)
-            y = y.pin_memory().to(device, non_blocking=True)
-        else:
-            x, y = x.to(device), y.to(device)
-        
-        duration = time.time() - start_time
-        timer.log('get_batch', duration)
-        
-        return x, y
+    print_dataset_sample(data_dir)
 
     meta_path = os.path.join(data_dir, 'meta.pkl')
     if os.path.exists(meta_path):
