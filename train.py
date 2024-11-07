@@ -368,10 +368,14 @@ def main():
             # Time forward/backward passes
             fwd_bwd_start = time.time()
             
-            # Accumulate gradients
+            # Accumulate gradients more efficiently
             for micro_step in range(config['gradient_accumulation_steps']):
                 if ddp:
                     model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
+                
+                # Get batch before computation to overlap data loading
+                if micro_step < config['gradient_accumulation_steps'] - 1:
+                    next_X, next_Y = get_batch('train', data_dir, config, device, device_type)
                 
                 # Forward pass
                 with ctx:
@@ -385,8 +389,11 @@ def main():
                     loss.backward()
                     
                 total_loss += loss.item()
-                X, Y = get_batch('train', data_dir, config, device, device_type)  # Get next batch
-            
+                
+                # Update X, Y for next iteration
+                if micro_step < config['gradient_accumulation_steps'] - 1:
+                    X, Y = next_X, next_Y
+
             fwd_bwd_time = time.time() - fwd_bwd_start
             timer.log('forward_backward', fwd_bwd_time)
             
@@ -397,22 +404,29 @@ def main():
             # Time optimizer step
             opt_start = time.time()
             
+            if config['grad_clip'] != 0.0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+            
+            # Start getting next batch while optimizer runs
+            next_X, next_Y = get_batch('train', data_dir, config, device, device_type)
+            
+            # Optimizer step
             if scaler is not None:
-                scaler.unscale_(optimizer)
-                if config['grad_clip'] != 0.0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    scaler.step(optimizer, closure)  # Pass the closure here
+                    scaler.step(optimizer, closure)
                 else:
                     scaler.step(optimizer)
                 scaler.update()
             else:
-                if config['grad_clip'] != 0.0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    optimizer.step(closure)  # Pass the closure here
+                    optimizer.step(closure)
                 else:
                     optimizer.step()
+                    
+            # Update batch for next iteration
+            X, Y = next_X, next_Y
             
             opt_time = time.time() - opt_start
             timer.log('optimizer_step', opt_time)
