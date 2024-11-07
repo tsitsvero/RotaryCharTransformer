@@ -6,6 +6,7 @@ import math
 import pickle
 from contextlib import nullcontext
 import inspect
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -30,6 +31,29 @@ import wandb
 
 # Add these imports at the top
 import torch.nn.functional as F
+
+class Timer:
+    def __init__(self):
+        self.times = defaultdict(float)
+        self.counts = defaultdict(int)
+        
+    def log(self, operation, duration):
+        self.times[operation] += duration
+        self.counts[operation] += 1
+    
+    def get_average(self, operation):
+        count = self.counts[operation]
+        if count == 0:
+            return 0.0
+        return self.times[operation] / count
+    
+    def print_stats(self):
+        print("\nTiming Statistics:")
+        for op in self.times:
+            avg_time = self.get_average(op)
+            total_time = self.times[op]
+            count = self.counts[op]
+            print(f"{op:20s}: {avg_time*1000:8.2f}ms (avg) | {total_time:8.2f}s (total) | {count:6d} calls")
 
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
@@ -99,9 +123,10 @@ def main():
 
     def get_batch(split):
         """Get a random batch of data from txt file"""
+        start_time = time.time()
+        
         data_path = os.path.join(data_dir, f'{split}.txt')
         
-        # First check if the file exists
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"Data file not found: {data_path}")
         
@@ -109,7 +134,6 @@ def main():
         with open(data_path, 'rb') as f:
             data = f.read()
         
-        # Print some statistics about the data
         if split == 'train' and not hasattr(get_batch, 'printed_stats'):
             print("\nData statistics:")
             print(f"Total length: {len(data)} bytes")
@@ -129,6 +153,9 @@ def main():
             y = y.pin_memory().to(device, non_blocking=True)
         else:
             x, y = x.to(device), y.to(device)
+        
+        duration = time.time() - start_time
+        timer.log('get_batch', duration)
         
         return x, y
 
@@ -318,15 +345,23 @@ def main():
             name=f"{config.get('model_type', 'baseline')}_stiefel_{use_stiefel}"
         )
 
+    timer = Timer()
+
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
             lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
+            # Time the full step
+            step_start = time.time()
+            
             optimizer.zero_grad(set_to_none=True)
             total_loss = 0.0
 
+            # Time forward/backward passes
+            fwd_bwd_start = time.time()
+            
             # Accumulate gradients
             for micro_step in range(config['gradient_accumulation_steps']):
                 if ddp:
@@ -337,7 +372,7 @@ def main():
                     logits, loss = model(X, Y)
                     loss = loss / config['gradient_accumulation_steps']
                 
-                # Backward pass with scaling if needed
+                # Backward pass
                 if scaler is not None:
                     scaler.scale(loss).backward()
                 else:
@@ -346,41 +381,46 @@ def main():
                 total_loss += loss.item()
                 X, Y = get_batch('train')  # Get next batch
             
-            # Define closure for the Stiefel optimizer
-            if use_stiefel:
-                def closure():
-                    return total_loss
-
-            # Handle gradient clipping and optimization step
+            fwd_bwd_time = time.time() - fwd_bwd_start
+            timer.log('forward_backward', fwd_bwd_time)
+            
+            # Time optimizer step
+            opt_start = time.time()
+            
             if scaler is not None:
-                # First unscale the gradients
                 scaler.unscale_(optimizer)
-                
-                # Clip gradients if needed
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-                
-                # Step with closure for Stiefel optimizer
                 if use_stiefel:
                     scaler.step(optimizer, closure)
                 else:
                     scaler.step(optimizer)
-                    
                 scaler.update()
             else:
-                # Clip gradients if needed
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-                
-                # Step with closure for Stiefel optimizer
                 if use_stiefel:
                     optimizer.step(closure)
                 else:
                     optimizer.step()
+            
+            opt_time = time.time() - opt_start
+            timer.log('optimizer_step', opt_time)
+            
+            total_step_time = time.time() - step_start
+            timer.log('total_step', total_step_time)
 
-            t1 = time.time()
-            dt = t1 - t0
-            t0 = t1
+            # Print timing stats periodically
+            if iter_num % config['log_interval'] == 0 and master_process:
+                timer.print_stats()
+                
+                # Also log to wandb
+                wandb.log({
+                    'time/get_batch': timer.get_average('get_batch'),
+                    'time/forward_backward': timer.get_average('forward_backward'),
+                    'time/optimizer_step': timer.get_average('optimizer_step'),
+                    'time/total_step': timer.get_average('total_step')
+                })
 
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
