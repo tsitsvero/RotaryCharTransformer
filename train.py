@@ -249,7 +249,7 @@ def main():
     def estimate_loss():
         out = {}
         model.eval()
-        for split in ['train', 'val']:
+        for split in ['train', 'valid']:
             losses = torch.zeros(config['eval_iters'])
             for k in range(config['eval_iters']):
                 X, Y = get_batch(split)
@@ -389,7 +389,7 @@ def main():
                 print_sample(model, X, Y, config)
                 
                 # Print losses and other metrics
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
                 
                 # Check orthogonality for all attention matrices
                 ortho_metrics = compute_orthogonality_error(raw_model)
@@ -403,7 +403,7 @@ def main():
                 wandb.log({
                     'iter': iter_num,
                     'train/loss': losses['train'],
-                    'val/loss': losses['val'],
+                    'valid/loss': losses['valid'],
                     'lr': lr,
                     'ortho/stiefel_mean': ortho_metrics['stiefel_mean'],
                     'ortho/other_mean': ortho_metrics['other_mean'],
@@ -411,18 +411,18 @@ def main():
                     'ortho/other_max': ortho_metrics['other_max'][1]
                 })
                 
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
                 
                 # Log metrics to wandb
                 wandb.log({
                     'iter': iter_num,
                     'train/loss': losses['train'],
-                    'val/loss': losses['val'],
+                    'valid/loss': losses['valid'],
                     'lr': lr,
                 })
                 
-                if losses['val'] < best_val_loss or config['always_save_checkpoint']:
-                    best_val_loss = losses['val']
+                if losses['valid'] < best_val_loss or config['always_save_checkpoint']:
+                    best_val_loss = losses['valid']
                     checkpoint = {
                         'model': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
