@@ -431,16 +431,9 @@ def main():
             
             # Optimizer step with gradient scaling
             def closure():
-                if scaler is not None:
-                    scaler.scale(loss).backward()
-                else:
-                    loss.backward()
                 return loss
 
             if scaler is not None:
-                scaler.unscale_(optimizer)
-                if config['grad_clip'] != 0.0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 scaler.step(optimizer, closure)
                 scaler.update()
             else:
