@@ -461,11 +461,13 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
-                # Print random sample
-                # print_sample(model, X, Y, config)
+                # Calculate BPC (bits per character) from losses
+                train_bpc = losses['train'] / math.log(2)
+                valid_bpc = losses['valid'] / math.log(2)
                 
-                # Print losses and other metrics
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
+                # Print losses and BPC
+                print(f"\nStep {iter_num}: train loss {losses['train']:.4f} ({train_bpc:.3f} bpc), "
+                      f"valid loss {losses['valid']:.4f} ({valid_bpc:.3f} bpc)")
                 
                 # Check orthogonality for all attention matrices
                 ortho_metrics = compute_orthogonality_error(raw_model)
@@ -479,7 +481,9 @@ def main():
                 wandb.log({
                     'iter': iter_num,
                     'train/loss': losses['train'],
+                    'train/bpc': train_bpc,
                     'valid/loss': losses['valid'],
+                    'valid/bpc': valid_bpc,
                     'lr': lr,
                     'ortho/stiefel_mean': ortho_metrics['stiefel_mean'],
                     'ortho/stiefel_rel_mean': ortho_metrics['stiefel_rel_mean'],
