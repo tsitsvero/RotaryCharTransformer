@@ -32,6 +32,54 @@ import wandb
 # Add these imports at the top
 import torch.nn.functional as F
 
+# Add these imports at the top
+from torch.utils.data import Dataset, DataLoader
+import threading
+import queue
+import io
+
+class TextDataset(Dataset):
+    def __init__(self, data_path, block_size):
+        # Read data once during initialization
+        with open(data_path, 'rb') as f:
+            self.data = f.read()
+        self.block_size = block_size
+        
+    def __len__(self):
+        return len(self.data) - self.block_size
+        
+    def __getitem__(self, idx):
+        chunk = self.data[idx:idx + self.block_size + 1]
+        x = torch.tensor([int(b) for b in chunk[:-1]], dtype=torch.long)
+        y = torch.tensor([int(b) for b in chunk[1:]], dtype=torch.long)
+        return x, y
+
+class DataPrefetcher:
+    def __init__(self, loader, device):
+        self.loader = iter(loader)
+        self.device = device
+        self.stream = torch.cuda.Stream()
+        self.preload()
+        
+    def preload(self):
+        try:
+            self.next_x, self.next_y = next(self.loader)
+        except StopIteration:
+            self.next_x = None
+            self.next_y = None
+            return
+
+        with torch.cuda.stream(self.stream):
+            self.next_x = self.next_x.to(self.device, non_blocking=True)
+            self.next_y = self.next_y.to(self.device, non_blocking=True)
+            
+    def next(self):
+        torch.cuda.current_stream().wait_stream(self.stream)
+        x = self.next_x
+        y = self.next_y
+        self.preload()
+        return x, y
+
 class Timer:
     def __init__(self):
         self.times = defaultdict(float)
@@ -75,52 +123,25 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
 timer = Timer()
 
 def get_batch(split, data_dir, config, device, device_type):
-    """Get a random batch of data from txt file"""
-    start_time = time.time()
+    """Get a batch using the prefetcher"""
+    if not hasattr(get_batch, 'prefetcher'):
+        # Initialize dataset and prefetcher on first call
+        data_path = os.path.join(data_dir, f'{split}.txt')
+        dataset = TextDataset(data_path, config['block_size'])
+        loader = DataLoader(
+            dataset,
+            batch_size=config['batch_size'],
+            shuffle=(split == 'train'),
+            num_workers=4,
+            pin_memory=True
+        )
+        get_batch.prefetcher = DataPrefetcher(loader, device)
     
-    # Time file reading
-    io_start = time.time()
-    data_path = os.path.join(data_dir, f'{split}.txt')
-    
-    if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Data file not found: {data_path}")
-    
-    # Read the entire file
-    with open(data_path, 'rb') as f:
-        data = f.read()
-    io_time = time.time() - io_start
-    
-    # Time tensor creation
-    tensor_start = time.time()
-    ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
-    x = torch.stack([torch.tensor([int(b) for b in data[i:i+config['block_size']]]) for i in ix])
-    y = torch.stack([torch.tensor([int(b) for b in data[i+1:i+1+config['block_size']]]) for i in ix])
-    tensor_time = time.time() - tensor_start
-    
-    # Time device transfer
-    transfer_start = time.time()
-    if device_type == 'cuda':
-        x = x.pin_memory().to(device, non_blocking=True)
-        y = y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    transfer_time = time.time() - transfer_start
-    
-    total_duration = time.time() - start_time
-    
-    # Log detailed timing
-    timer.log('get_batch_total', total_duration)
-    timer.log('get_batch_io', io_time)
-    timer.log('get_batch_tensor', tensor_time)
-    timer.log('get_batch_transfer', transfer_time)
-    
-    if split == 'train' and not hasattr(get_batch, 'timing_printed'):
-        print("\nget_batch timing breakdown:")
-        print(f"I/O time:        {io_time*1000:.2f}ms")
-        print(f"Tensor creation: {tensor_time*1000:.2f}ms")
-        print(f"Device transfer: {transfer_time*1000:.2f}ms")
-        print(f"Total time:      {total_duration*1000:.2f}ms")
-        get_batch.timing_printed = True
+    # Get next batch
+    x, y = get_batch.prefetcher.next()
+    if x is None:  # Reset if we reached the end
+        get_batch.prefetcher = None
+        return get_batch(split, data_dir, config, device, device_type)
     
     return x, y
 
@@ -365,6 +386,12 @@ def main():
 
     timer = Timer()
 
+    # Initialize automatic mixed precision scaler
+    scaler = torch.cuda.amp.GradScaler() if device_type == 'cuda' and config['dtype'] == 'float16' else None
+    
+    # Create gradient accumulation buffer
+    grad_acc_steps = config['gradient_accumulation_steps']
+    
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
             lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
@@ -374,27 +401,19 @@ def main():
             # Time the full step
             step_start = time.time()
             
+            # Zero gradients at the start of accumulation
             optimizer.zero_grad(set_to_none=True)
             total_loss = 0.0
-
-            # Time forward/backward passes
-            fwd_bwd_start = time.time()
             
-            # Accumulate gradients more efficiently
-            for micro_step in range(config['gradient_accumulation_steps']):
-                if ddp:
-                    model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
-                
-                # Get batch before computation to overlap data loading
-                if micro_step < config['gradient_accumulation_steps'] - 1:
-                    next_X, next_Y = get_batch('train', data_dir, config, device, device_type)
-                
-                # Forward pass
+            # Accumulate gradients
+            for micro_step in range(grad_acc_steps):
                 with ctx:
-                    logits, loss = model(X, Y)
-                    loss = loss / config['gradient_accumulation_steps']
+                    # Forward pass with automatic mixed precision
+                    with torch.cuda.amp.autocast(enabled=scaler is not None):
+                        logits, loss = model(X, Y)
+                        loss = loss / grad_acc_steps
                 
-                # Backward pass
+                # Backward pass with gradient scaling
                 if scaler is not None:
                     scaler.scale(loss).backward()
                 else:
@@ -402,49 +421,28 @@ def main():
                     
                 total_loss += loss.item()
                 
-                # Update X, Y for next iteration
-                if micro_step < config['gradient_accumulation_steps'] - 1:
-                    X, Y = next_X, next_Y
-
-            fwd_bwd_time = time.time() - fwd_bwd_start
-            timer.log('forward_backward', fwd_bwd_time)
+                # Prefetch next batch while computing gradients
+                if micro_step < grad_acc_steps - 1:
+                    X, Y = get_batch('train', data_dir, config, device, device_type)
             
-            # Define closure for the Stiefel optimizer
-            def closure():
-                return total_loss
-
-            # Time optimizer step
-            opt_start = time.time()
-            
+            # Gradient clipping
             if config['grad_clip'] != 0.0:
                 if scaler is not None:
                     scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
             
-            # Start getting next batch while optimizer runs
-            next_X, next_Y = get_batch('train', data_dir, config, device, device_type)
-            
-            # Optimizer step
+            # Optimizer step with gradient scaling
             if scaler is not None:
-                if use_stiefel:
-                    scaler.step(optimizer, closure)
-                else:
-                    scaler.step(optimizer)
+                scaler.step(optimizer)
                 scaler.update()
             else:
-                if use_stiefel:
-                    optimizer.step(closure)
-                else:
-                    optimizer.step()
-                    
-            # Update batch for next iteration
-            X, Y = next_X, next_Y
+                optimizer.step()
             
-            opt_time = time.time() - opt_start
-            timer.log('optimizer_step', opt_time)
+            # Get next batch for next iteration
+            X, Y = get_batch('train', data_dir, config, device, device_type)
             
-            total_step_time = time.time() - step_start
-            timer.log('total_step', total_step_time)
+            opt_time = time.time() - step_start
+            timer.log('total_step', opt_time)
 
             # Print timing stats periodically
             if iter_num % config['log_interval'] == 0 and master_process:
@@ -453,7 +451,6 @@ def main():
                 # Also log to wandb
                 wandb.log({
                     'time/get_batch': timer.get_average('get_batch'),
-                    'time/forward_backward': timer.get_average('forward_backward'),
                     'time/optimizer_step': timer.get_average('optimizer_step'),
                     'time/total_step': timer.get_average('total_step')
                 })

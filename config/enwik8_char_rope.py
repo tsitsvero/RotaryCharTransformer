@@ -43,7 +43,7 @@ use_stiefel = False
 
 # System parameters
 device = 'cuda'
-dtype = 'bfloat16'  # Changed to bfloat16 for better stability
+dtype = 'float16'  # Changed to bfloat16 for better stability
 compile = False
 
 # Fixed vocab size for enwik8
