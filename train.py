@@ -31,6 +31,9 @@ import wandb
 # Add these imports at the top
 import torch.nn.functional as F
 
+# Add these imports at the top
+from torch.profiler import profile, record_function, ProfilerActivity
+
 def get_serializable_config(config):
     return {k: v for k, v in config.items() if isinstance(v, (int, float, str, bool, type(None))) and not k.startswith('__')}
 
@@ -72,6 +75,63 @@ def print_sample(model, device, prompt="hello ", max_new_tokens=100):
     print("=" * 40)
     
     model.train()
+
+def profile_training_step(model, optimizer, get_batch, ctx, config, device, scaler=None, use_stiefel=False):
+    """Profile a single training step to identify bottlenecks"""
+    activities = [
+        ProfilerActivity.CPU,
+        ProfilerActivity.CUDA,
+    ]
+    
+    with profile(
+        activities=activities,
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+        # Zero gradients
+        with record_function("zero_grad"):
+            optimizer.zero_grad(set_to_none=True)
+        
+        # Get batch
+        with record_function("get_batch"):
+            X, Y = get_batch('train')
+        
+        # Forward pass
+        with record_function("forward"):
+            with ctx:
+                logits, loss = model(X, Y)
+        
+        # Backward pass
+        with record_function("backward"):
+            if scaler is not None:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+        
+        # Optimizer step
+        with record_function("optimizer_step"):
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+                if config['grad_clip'] != 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+                if use_stiefel:
+                    scaler.step(optimizer, lambda: loss.item())
+                else:
+                    scaler.step(optimizer)
+                scaler.update()
+            else:
+                if config['grad_clip'] != 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+                if use_stiefel:
+                    optimizer.step(lambda: loss.item())
+                else:
+                    optimizer.step()
+    
+    print("\nProfiling Results:")
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    
+    return prof
 
 def main():
     parser = argparse.ArgumentParser()
@@ -349,45 +409,61 @@ def main():
             name=f"{config.get('model_type', 'baseline')}_stiefel_{use_stiefel}"
         )
 
+    # Add after model initialization but before training loop
+    if master_process:
+        print("\nProfiling one training step...")
+        profile_results = profile_training_step(
+            model=model,
+            optimizer=optimizer,
+            get_batch=get_batch,
+            ctx=ctx,
+            config=config,
+            device=device,
+            scaler=scaler,
+            use_stiefel=use_stiefel
+        )
+        
+        # Save detailed profiling results
+        profile_path = os.path.join(config['out_dir'], 'profile_results.txt')
+        with open(profile_path, 'w') as f:
+            f.write(profile_results.key_averages().table(sort_by="cuda_time_total", row_limit=None))
+        print(f"\nDetailed profiling results saved to {profile_path}")
+
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
+            step_start = time.time()
+            
+            # Timing for optimizer setup
+            opt_start = time.time()
             lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
-
-            # Zero gradients once for all micro-batches
             optimizer.zero_grad(set_to_none=True)
+            opt_time = time.time() - opt_start
             
-            # Pre-fetch batches for all micro-steps
-            batches = [(get_batch('train')) for _ in range(config['gradient_accumulation_steps'])]
+            # Timing for forward pass
+            fwd_start = time.time()
+            with ctx:
+                logits, loss = model(X, Y)
+                loss = loss / config['gradient_accumulation_steps']
+            fwd_time = time.time() - fwd_start
             
-            total_loss = 0.0
+            # Timing for backward pass
+            bwd_start = time.time()
+            if scaler is not None:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+            bwd_time = time.time() - bwd_start
             
-            # Accumulate gradients
-            for micro_step, (X, Y) in enumerate(batches):
-                if ddp:
-                    model.require_backward_grad_sync = (micro_step == config['gradient_accumulation_steps'] - 1)
-                
-                # Forward pass with automatic mixed precision
-                with ctx:
-                    logits, loss = model(X, Y)
-                    loss = loss / config['gradient_accumulation_steps']
-                
-                # Backward pass
-                if scaler is not None:
-                    scaler.scale(loss).backward()
-                else:
-                    loss.backward()
-                    
-                total_loss += loss.item()
-
-            # Optimization step
+            # Timing for optimizer step
+            step_opt_start = time.time()
             if scaler is not None:
                 scaler.unscale_(optimizer)
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    scaler.step(optimizer, lambda: total_loss)
+                    scaler.step(optimizer, lambda: loss.item())
                 else:
                     scaler.step(optimizer)
                 scaler.update()
@@ -395,13 +471,19 @@ def main():
                 if config['grad_clip'] != 0.0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 if use_stiefel:
-                    optimizer.step(lambda: total_loss)
+                    optimizer.step(lambda: loss.item())
                 else:
                     optimizer.step()
-
-            t1 = time.time()
-            dt = t1 - t0
-            t0 = t1
+            step_opt_time = time.time() - step_opt_start
+            
+            # Log timing information periodically
+            if iter_num % config['log_interval'] == 0 and master_process:
+                print(f"\nTiming breakdown for iteration {iter_num}:")
+                print(f"Optimizer setup: {opt_time*1000:.2f}ms")
+                print(f"Forward pass: {fwd_time*1000:.2f}ms")
+                print(f"Backward pass: {bwd_time*1000:.2f}ms")
+                print(f"Optimizer step: {step_opt_time*1000:.2f}ms")
+                print(f"Total step time: {(time.time() - step_start)*1000:.2f}ms")
 
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
