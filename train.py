@@ -449,7 +449,7 @@ def main():
 
             # Print timing stats periodically
             if iter_num % config['log_interval'] == 0 and master_process:
-                timer.print_stats()
+                # timer.print_stats()  # Comment out timing stats
                 
                 # Also log to wandb
                 wandb.log({
@@ -630,11 +630,11 @@ def generate_sequence(model, device, length=100, temperature=1.0):
         # Update context
         context = torch.cat((context, next_token), dim=1)
     
-    # Convert bytes to string
+    # Convert bytes to string, including the 'hello' prefix
     try:
-        result = bytes(generated).decode('utf-8', errors='replace')
+        result = 'hello' + bytes(generated).decode('utf-8', errors='replace')
     except:
-        result = ''.join(chr(b) for b in generated)
+        result = 'hello' + ''.join(chr(b) for b in generated)
     
     return result
 
