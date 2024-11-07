@@ -227,9 +227,9 @@ class StiefelAdam(Optimizer):
         if closure is not None:
             loss = closure()
             
-        # Pre-allocate tensors for efficiency
-        device = next(self.param_groups[0]['params']).device
-        dtype = next(self.param_groups[0]['params']).dtype
+        # Fix: Get device and dtype from the first parameter
+        device = next(iter(self.param_groups[0]['params'])).device
+        dtype = next(iter(self.param_groups[0]['params'])).dtype
         
         for group in self.param_groups:
             for p in group['params']:
@@ -263,16 +263,17 @@ class StiefelAdam(Optimizer):
                 # Update momentum and variance
                 exp_avg = state['exp_avg']
                 exp_avg_sq = state['exp_avg_sq']
+                beta1, beta2 = group['betas']
                 
                 # Use fused operations where possible
-                exp_avg.mul_(group['beta1']).add_(grad, alpha=1 - group['beta1'])
-                exp_avg_sq.mul_(group['beta2']).addcmul_(grad, grad, value=1 - group['beta2'])
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
                 
                 # Compute step size
-                step_size = group['lr'] * math.sqrt(1 - group['beta2'] ** state['step']) / (1 - group['beta1'] ** state['step'])
+                step_size = group['lr'] * math.sqrt(1 - beta2 ** state['step']) / (1 - beta1 ** state['step'])
                 
                 # Update parameter efficiently
-                p.data.addcdiv_(exp_avg, exp_avg_sq.sqrt().add_(group['eps']), value=-step_size)
+                p.data.addcdiv_(exp_avg, exp_avg_sq.sqrt().add_(group['epsilon']), value=-step_size)
                 
                 # Project back to Stiefel manifold
                 with torch.cuda.amp.autocast(enabled=False):
@@ -288,20 +289,22 @@ class CombinedOptimizer(torch.optim.Optimizer):
         This is due to that our StiefelSGD and Euclidean SGD (StiefelAdam and Euclidean Adam) uses the same hyperparameters and do not need to be tuned separately.
     """
     def __init__(self, *arg):
-        self.optimizer_list=list(arg)
-        param_group=[]
+        self.optimizer_list = list(arg)
+        param_groups = []
         for op in self.optimizer_list:
             for pg in op.param_groups:
-                param_group.append(pg)
-        super().__init__(param_group, defaults=dict())
+                param_groups.append(pg)
+        super().__init__(param_groups, defaults=dict())
+
     def zero_grad(self, set_to_none: bool = False):
         for op in self.optimizer_list:
-            op.zero_grad()
-    def step(self, closure):
+            op.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
         loss = None
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
         for op in self.optimizer_list:
-            loss=op.step()
+            op.step(closure)
         return loss
