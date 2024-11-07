@@ -7,8 +7,6 @@ import inspect
 from dataclasses import dataclass
 from rational import Rational
 
-from torch.nn import LayerNorm
-
 
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
@@ -38,7 +36,7 @@ class GPTWithRoPE(nn.Module):
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
@@ -55,7 +53,6 @@ class GPTWithRoPE(nn.Module):
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -73,20 +70,14 @@ class GPTWithRoPE(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
-        
-        # Assert the input dimensions
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        
-        # Forward the GPT model itself
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+        assert idx.max() < self.config.vocab_size, f"Input contains token {idx.max()} which is >= vocab size {self.config.vocab_size}"
         
         # Token embeddings of shape (b, t, n_embd)
-        tok_emb = self.transformer.wte(idx)
+        tok_emb = self.transformer.wte(idx.long())  # Ensure long dtype for embeddings
         
-        # Add positional embeddings (RoPE is applied in the attention layers)
+        # Forward pass through transformer blocks
         x = self.transformer.drop(tok_emb)
-        
-        # Apply transformer blocks
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -94,13 +85,7 @@ class GPTWithRoPE(nn.Module):
         if targets is not None:
             # Calculate loss if targets are provided
             logits = self.lm_head(x)
-            # Make tensors contiguous before view operation
-            logits = logits.contiguous()
-            targets = targets.contiguous()
-            # Use view for better performance
-            logits = logits.view(-1, logits.size(-1))
-            targets = targets.view(-1)
-            loss = F.cross_entropy(logits, targets, ignore_index=-1)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.long().view(-1), ignore_index=-1)
         else:
             # For inference, only compute logits for the last position
             logits = self.lm_head(x[:, [-1], :])
