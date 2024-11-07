@@ -387,7 +387,7 @@ def main():
     timer = Timer()
 
     # Initialize automatic mixed precision scaler
-    scaler = torch.cuda.amp.GradScaler() if device_type == 'cuda' and config['dtype'] == 'float16' else None
+    scaler = torch.amp.GradScaler('cuda') if device_type == 'cuda' and config['dtype'] == 'float16' else None
     
     # Create gradient accumulation buffer
     grad_acc_steps = config['gradient_accumulation_steps']
@@ -407,11 +407,9 @@ def main():
             
             # Accumulate gradients
             for micro_step in range(grad_acc_steps):
-                with ctx:
-                    # Forward pass with automatic mixed precision
-                    with torch.cuda.amp.autocast(enabled=scaler is not None):
-                        logits, loss = model(X, Y)
-                        loss = loss / grad_acc_steps
+                with torch.amp.autocast('cuda', enabled=scaler is not None):
+                    logits, loss = model(X, Y)
+                    loss = loss / grad_acc_steps
                 
                 # Backward pass with gradient scaling
                 if scaler is not None:
@@ -479,9 +477,11 @@ def main():
                     'valid/loss': losses['valid'],
                     'lr': lr,
                     'ortho/stiefel_mean': ortho_metrics['stiefel_mean'],
+                    'ortho/stiefel_rel_mean': ortho_metrics['stiefel_rel_mean'],
                     'ortho/other_mean': ortho_metrics['other_mean'],
+                    'ortho/other_rel_mean': ortho_metrics['other_rel_mean'],
                     'ortho/stiefel_max': ortho_metrics['stiefel_max'][1],
-                    'ortho/other_max': ortho_metrics['other_max'][1]
+                    'ortho/stiefel_max_rel': ortho_metrics['stiefel_max'][2],
                 })
                 
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
@@ -550,27 +550,21 @@ def compute_orthogonality_error(model):
             else:
                 WtW = W @ W.T
                 I = torch.eye(WtW.shape[0], device=WtW.device)
-            error = torch.norm(WtW - I, p='fro')
+            error = torch.norm(WtW - I, p='fro').item()
+            rel_error = error / torch.norm(I, p='fro').item()
             
-            # Separate Stiefel and non-Stiefel matrices
             if any(x in name for x in ['3.attn.q.weight']):
-                stiefel_errors.append((name, error.item()))
+                stiefel_errors.append((name, error, rel_error))
             else:
-                other_attn_errors.append((name, error.item()))
-    
-    # Calculate mean errors
-    stiefel_mean = np.mean([e[1] for e in stiefel_errors]) if stiefel_errors else 0.0
-    other_mean = np.mean([e[1] for e in other_attn_errors]) if other_attn_errors else 0.0
-    
-    # Get max errors with corresponding layer names
-    stiefel_max = max(stiefel_errors, key=lambda x: x[1]) if stiefel_errors else ('none', 0.0)
-    other_max = max(other_attn_errors, key=lambda x: x[1]) if other_attn_errors else ('none', 0.0)
+                other_attn_errors.append((name, error, rel_error))
     
     return {
-        'stiefel_mean': stiefel_mean,
-        'other_mean': other_mean,
-        'stiefel_max': stiefel_max,
-        'other_max': other_max
+        'stiefel_mean': np.mean([e[1] for e in stiefel_errors]) if stiefel_errors else 0.0,
+        'stiefel_rel_mean': np.mean([e[2] for e in stiefel_errors]) if stiefel_errors else 0.0,
+        'other_mean': np.mean([e[1] for e in other_attn_errors]) if other_attn_errors else 0.0,
+        'other_rel_mean': np.mean([e[2] for e in other_attn_errors]) if other_attn_errors else 0.0,
+        'stiefel_max': max(stiefel_errors, key=lambda x: x[1]) if stiefel_errors else ('none', 0.0, 0.0),
+        'other_max': max(other_attn_errors, key=lambda x: x[1]) if other_attn_errors else ('none', 0.0, 0.0)
     }
 
 # Add this function after get_batch
