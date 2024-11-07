@@ -135,8 +135,8 @@ def main():
             with open(data_path, 'rb') as f:
                 data = f.read()
             
-            # Convert to tensor and move to device
-            data_tensor = torch.frombuffer(data, dtype=torch.uint8)
+            # Convert to tensor and move to device, ensure long dtype
+            data_tensor = torch.frombuffer(data, dtype=torch.uint8).long()  # Convert to long
             if device_type == 'cuda':
                 data_tensor = data_tensor.pin_memory().to(device, non_blocking=True)
             else:
@@ -149,6 +149,7 @@ def main():
                 print(f"Total length: {len(data)} bytes")
                 print(f"Unique values: {len(set(data))}")
                 print(f"Sample of raw bytes: {list(data[:50])}")
+                print(f"Max value in tensor: {data_tensor.max().item()}")
         
         return data_dict
 
@@ -163,6 +164,7 @@ def main():
         data = data_tensors[split]
         ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],), device=device)
         
+        # Data is already in long format from load_data
         x = torch.stack([data[i:i+config['block_size']] for i in ix])
         y = torch.stack([data[i+1:i+1+config['block_size']] for i in ix])
         
