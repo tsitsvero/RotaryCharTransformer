@@ -523,6 +523,13 @@ def main():
                 lossf = total_loss * config['gradient_accumulation_steps']
                 print(f"Iter {iter_num}: loss {lossf:.4f}")
                 
+                # Generate and print sequence
+                generated_text = generate_sequence(raw_model, device)
+                print("\nGenerated sequence starting with 'hello':")
+                print("=" * 80)
+                print(generated_text)
+                print("=" * 80)
+                
                 # Log training metrics
                 wandb.log({
                     'iter': iter_num,
@@ -599,6 +606,37 @@ def print_sample(model, x, y, config):
     print(f"Input  (20 chars): {input_str}")
     print(f"Target (20 chars): {target_str}")
     print(f"Pred   (20 chars): {pred_str}")
+
+# Add this function after print_sample
+@torch.no_grad()
+def generate_sequence(model, device, length=100, temperature=1.0):
+    """Generate a sequence starting with 'hello'"""
+    # Convert 'hello' to byte encoding
+    context = torch.tensor([ord(c) for c in 'hello'], dtype=torch.long, device=device).unsqueeze(0)
+    
+    generated = []
+    for _ in range(length):
+        # Get logits from model
+        logits, _ = model(context)
+        logits = logits[:, -1, :] / temperature
+        probs = F.softmax(logits, dim=-1)
+        
+        # Sample from the distribution
+        next_token = torch.multinomial(probs, num_samples=1)
+        
+        # Append to generated sequence
+        generated.append(next_token.item())
+        
+        # Update context
+        context = torch.cat((context, next_token), dim=1)
+    
+    # Convert bytes to string
+    try:
+        result = bytes(generated).decode('utf-8', errors='replace')
+    except:
+        result = ''.join(chr(b) for b in generated)
+    
+    return result
 
 if __name__ == '__main__':
     main()
