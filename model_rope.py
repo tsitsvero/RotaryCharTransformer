@@ -7,7 +7,7 @@ import inspect
 from dataclasses import dataclass
 from rational import Rational
 
-
+ 
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 
