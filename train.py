@@ -526,59 +526,5 @@ def compute_orthogonality_error(model):
         'other_max': other_max
     }
 
-# Add this function after get_batch
-def print_sample(model, x, y, config):
-    """Print a random sample from the batch with its prediction"""
-    # Select random sample from batch
-    idx = torch.randint(0, x.shape[0], (1,)).item()
-    sample_x = x[idx]
-    sample_y = y[idx]
-    
-    # Get model prediction for the entire sequence
-    with torch.no_grad():
-        logits, _ = model(sample_x.unsqueeze(0))
-        probs = F.softmax(logits, dim=-1)  # Shape should be [1, seq_len, vocab_size]
-        pred = torch.argmax(probs, dim=-1)  # Shape should be [1, seq_len]
-        
-        # Print shapes for debugging
-        print(f"\nDebug shapes:")
-        print(f"logits shape: {logits.shape}")
-        print(f"probs shape: {probs.shape}")
-        print(f"pred shape: {pred.shape}")
-    
-    # Convert to string directly
-    def bytes_to_string(tensor):
-        try:
-            # Handle different tensor shapes
-            if len(tensor.shape) > 1:
-                tensor = tensor.squeeze()
-            bytes_data = tensor.cpu().numpy().astype(np.uint8).tobytes()
-            return bytes_data.decode('utf-8', errors='replace')
-        except Exception as e:
-            print(f"Error in bytes_to_string: {e}")
-            return f"<Error: {tensor.shape}>"
-    
-    # Get first 20 characters
-    input_str = bytes_to_string(sample_x[:20])
-    target_str = bytes_to_string(sample_y[:20])
-    pred_str = bytes_to_string(pred[0, :20])  # Take first batch item
-    
-    # Also show raw predictions for debugging
-    print("\nRandom sample:")
-    print(f"Input  (20 chars): {input_str}")
-    print(f"Target (20 chars): {target_str}")
-    print(f"Pred   (20 chars): {pred_str}")
-    print(f"Raw pred values: {pred[0, :5].tolist()}")  # Show first 5 predicted values
-    
-    # Show prediction probabilities for first position
-    top_probs, top_indices = torch.topk(probs[0, 0], 5)  # First batch, first position, top 5
-    print("\nTop 5 predictions for first position:")
-    for prob, idx in zip(top_probs.tolist(), top_indices.tolist()):
-        try:
-            char = bytes([idx]).decode('utf-8', errors='replace')
-            print(f"'{char}' ({idx}): {prob:.3f}")
-        except:
-            print(f"<{idx}>: {prob:.3f}")
-
 if __name__ == '__main__':
     main()
