@@ -519,7 +519,7 @@ def main():
             local_iter_num += 1
             pbar.update(1)
 
-            if iter_num % config['log_interval'] == 0 and master_process:
+            if iter_num % config['log_interval'] == 1 and master_process:
                 lossf = total_loss * config['gradient_accumulation_steps']
                 print(f"Iter {iter_num}: loss {lossf:.4f}")
                 
