@@ -47,8 +47,8 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
     print(data.decode('utf-8', errors='replace'))
     print("=" * 80)
 
-def print_sample(model, device, prompt="hello ", max_new_tokens=100, show_details=False):
-    """Generate and print a sample from the model with optional prediction details"""
+def print_sample(model, device, prompt="hello ", max_new_tokens=100):
+    """Generate and print a sample from the model"""
     model.eval()
     
     # Convert prompt to bytes and create input tensor
@@ -56,20 +56,6 @@ def print_sample(model, device, prompt="hello ", max_new_tokens=100, show_detail
     input_tensor = torch.tensor(input_bytes, dtype=torch.long)[None, ...].to(device)
     
     with torch.no_grad():
-        # Get initial prediction
-        logits, _ = model(input_tensor, None)
-        if show_details:
-            # Show prediction probabilities for first position
-            probs = F.softmax(logits[0, -1], dim=-1)
-            top_probs, top_indices = torch.topk(probs, 5)
-            print("\nTop 5 predictions for next token:")
-            for prob, idx in zip(top_probs.tolist(), top_indices.tolist()):
-                try:
-                    char = bytes([idx]).decode('utf-8', errors='replace')
-                    print(f"'{char}' ({idx}): {prob:.3f}")
-                except:
-                    print(f"<{idx}>: {prob:.3f}")
-        
         # Generate with temperature = 0.8
         output_ids = model.generate(
             input_tensor,
@@ -425,8 +411,8 @@ def main():
             if iter_num % config['eval_interval'] == 0 and master_process:
                 losses = estimate_loss()
                 
-                # Generate and print sample text with prediction details
-                print_sample(raw_model, device, show_details=True)
+                # Generate and print sample text
+                print_sample(raw_model, device)
                 
                 # Print losses and other metrics
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, val loss {losses['valid']:.4f}")
@@ -539,6 +525,60 @@ def compute_orthogonality_error(model):
         'stiefel_max': stiefel_max,
         'other_max': other_max
     }
+
+# Add this function after get_batch
+def print_sample(model, x, y, config):
+    """Print a random sample from the batch with its prediction"""
+    # Select random sample from batch
+    idx = torch.randint(0, x.shape[0], (1,)).item()
+    sample_x = x[idx]
+    sample_y = y[idx]
+    
+    # Get model prediction for the entire sequence
+    with torch.no_grad():
+        logits, _ = model(sample_x.unsqueeze(0))
+        probs = F.softmax(logits, dim=-1)  # Shape should be [1, seq_len, vocab_size]
+        pred = torch.argmax(probs, dim=-1)  # Shape should be [1, seq_len]
+        
+        # Print shapes for debugging
+        print(f"\nDebug shapes:")
+        print(f"logits shape: {logits.shape}")
+        print(f"probs shape: {probs.shape}")
+        print(f"pred shape: {pred.shape}")
+    
+    # Convert to string directly
+    def bytes_to_string(tensor):
+        try:
+            # Handle different tensor shapes
+            if len(tensor.shape) > 1:
+                tensor = tensor.squeeze()
+            bytes_data = tensor.cpu().numpy().astype(np.uint8).tobytes()
+            return bytes_data.decode('utf-8', errors='replace')
+        except Exception as e:
+            print(f"Error in bytes_to_string: {e}")
+            return f"<Error: {tensor.shape}>"
+    
+    # Get first 20 characters
+    input_str = bytes_to_string(sample_x[:20])
+    target_str = bytes_to_string(sample_y[:20])
+    pred_str = bytes_to_string(pred[0, :20])  # Take first batch item
+    
+    # Also show raw predictions for debugging
+    print("\nRandom sample:")
+    print(f"Input  (20 chars): {input_str}")
+    print(f"Target (20 chars): {target_str}")
+    print(f"Pred   (20 chars): {pred_str}")
+    print(f"Raw pred values: {pred[0, :5].tolist()}")  # Show first 5 predicted values
+    
+    # Show prediction probabilities for first position
+    top_probs, top_indices = torch.topk(probs[0, 0], 5)  # First batch, first position, top 5
+    print("\nTop 5 predictions for first position:")
+    for prob, idx in zip(top_probs.tolist(), top_indices.tolist()):
+        try:
+            char = bytes([idx]).decode('utf-8', errors='replace')
+            print(f"'{char}' ({idx}): {prob:.3f}")
+        except:
+            print(f"<{idx}>: {prob:.3f}")
 
 if __name__ == '__main__':
     main()
