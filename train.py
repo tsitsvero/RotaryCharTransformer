@@ -74,7 +74,7 @@ def print_dataset_sample(data_dir, split='train', n_chars=1000):
 # Move timer initialization before get_batch definition
 timer = Timer()
 
-def get_batch(split):
+def get_batch(split, data_dir, config, device, device_type):
     """Get a random batch of data from txt file"""
     start_time = time.time()
     
@@ -285,7 +285,7 @@ def main():
         for split in ['train', 'valid']:
             losses = torch.zeros(config['eval_iters'])
             for k in range(config['eval_iters']):
-                X, Y = get_batch(split)
+                X, Y = get_batch(split, data_dir, config, device, device_type)
                 with ctx:
                     logits, loss = model(X, Y)
                 losses[k] = loss.item()
@@ -302,7 +302,7 @@ def main():
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return config['min_lr'] + coeff * (config['learning_rate'] - config['min_lr'])
 
-    X, Y = get_batch('train')
+    X, Y = get_batch('train', data_dir, config, device, device_type)
     running_mfu = -1.0
     t0 = time.time()
 
@@ -385,7 +385,7 @@ def main():
                     loss.backward()
                     
                 total_loss += loss.item()
-                X, Y = get_batch('train')  # Get next batch
+                X, Y = get_batch('train', data_dir, config, device, device_type)  # Get next batch
             
             fwd_bwd_time = time.time() - fwd_bwd_start
             timer.log('forward_backward', fwd_bwd_time)
