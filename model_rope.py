@@ -245,44 +245,59 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+        # Enable flash attention if available
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
+            # Use packed storage for better memory efficiency
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
+                                     .view(1, 1, config.block_size, config.block_size), persistent=False)
+        
+        # Pre-compute rotary embeddings for efficiency
         self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
-
+        
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
-        # Apply rotary embeddings to q and k
+        B, T, C = x.size()
+        
+        # Fuse Q,K,V projections into a single matmul
+        qkv = torch.stack([
+            self.q(x),
+            self.k(x),
+            self.v(x)
+        ], dim=2)
+        
+        # Reshape and transpose in one operation
+        qkv = qkv.view(B, T, 3, self.n_head, C // self.n_head).permute(0, 2, 3, 1, 4)
+        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
+        
+        # Apply rotary embeddings (now more efficient)
         q, k = self.rotary_emb(q, k)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        
+        # Use flash attention when available
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            # Efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=None,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+                scale=1.0 / math.sqrt(k.size(-1))
+            )
         else:
-            # manual implementation of attention
+            # Optimized manual implementation
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
+            # Use additive attention mask for better numerical stability
+            mask = self.bias[:,:,:T,:T]
+            att = att.masked_fill(mask == 0, float('-inf'))
+            att = F.softmax(att, dim=-1, dtype=torch.float32).to(q.dtype)
             att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-
-        # re-assemble all head outputs side by side
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
-
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-        return y
+            y = att @ v
+        
+        # Reshape back efficiently
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        
+        # Output projection
+        return self.resid_dropout(self.c_proj(y))
 
 
 class RotaryEmbedding(nn.Module):

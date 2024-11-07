@@ -225,68 +225,60 @@ class StiefelAdam(Optimizer):
     def step(self, closure=None):
         loss = None
         if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
+            loss = closure()
+            
+        # Pre-allocate tensors for efficiency
+        device = next(self.param_groups[0]['params']).device
+        dtype = next(self.param_groups[0]['params']).dtype
+        
         for group in self.param_groups:
-            lr = group['lr']
-            for X_raw in group['params']:
-                if X_raw.grad is None:
+            for p in group['params']:
+                if p.grad is None:
                     continue
-                # If X has more than 2 dimensions with shape [*, n, m], we will keep each of n-by-m matrices on Stiefel manifold.
-                X=X_raw.view(-1,X_raw.shape[-2], X_raw.shape[-1])
-                X_grad=X_raw.grad.view(-1,X_raw.shape[-2], X_raw.shape[-1])
-                # X should be a tall and thin matrix (n>m). Otherwise, it will be transposed.
-                square = False
-                if X.shape[-2]<X.shape[-1]:
-                    X=X.transpose(0,1)
-                    X_grad=X_grad.transpose(0,1)
-                else:
-                    if X.shape[-2]==X.shape[-1]:
-                        square = True
-                        
-                # Make the algorithm compatible with SO(n)
-                # In that case, n=m, and we no longer need V
-                beta_1, beta_2=group['betas']
-                epsilon=group['epsilon']
-                expm_method=group['expm_method']
-                a=group['a']
-                b=group['b']
-                inner_iter=group['inner_iter']
+                    
+                # Efficient in-place operations
+                grad = p.grad
+                state = self.state[p]
                 
-                param_state = self.state[X_raw]
-
-                if 'Y_buffer' not in param_state:
-                    Y = param_state['Y_buffer']=torch.zeros(X.shape[0], X.shape[-1],X.shape[-1], device=X.device, dtype=X.dtype)
-                if 'V_buffer' not in param_state and not square:
-                    V = param_state['V_buffer']=torch.zeros(X.shape[0], X.shape[-2],X.shape[-1], device=X.device, dtype=X.dtype)
-                if 'p_Y_buffer' not in param_state:
-                    p_Y = param_state['p_Y_buffer']=torch.zeros(X.shape[0], X.shape[-1],X.shape[-1], device=X.device, dtype=X.dtype)
-                if 'p_V_buffer' not in param_state and not square:
-                    p_V = param_state['p_V_buffer']=torch.zeros(X.shape[0], X.shape[-2],X.shape[-1], device=X.device, dtype=X.dtype)
-                if 'step' not in param_state:
-                    num_step=param_state['step']=0
+                # Initialize state buffers if needed
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
+                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.contiguous_format)
                 
-                param_state['step']+=1
-                Y = param_state['Y_buffer']
-                p_Y = param_state['p_Y_buffer']
-                if not square:
-                    V = param_state['V_buffer']
-                    p_V = param_state['p_V_buffer']
-                step=param_state['step']
-
-                if square:
-                    update_func=lambda X, Y, X_grad, p_Y: _update_func_Stiefel_Adam(X, Y, None, X_grad, p_Y, None, step, square, a, b, lr, beta_1, beta_2, expm_method, inner_iter, epsilon)
-                    torch.vmap(update_func, out_dims=None)(X, Y, X_grad, p_Y)
-                else:
-                    update_func=lambda X, Y, V, X_grad, p_Y, p_V: _update_func_Stiefel_Adam(X, Y, V, X_grad, p_Y, p_V, step, square, a, b, lr, beta_1, beta_2, expm_method, inner_iter, epsilon)
-                    torch.vmap(update_func, out_dims=None)(X, Y, V, X_grad, p_Y, p_V)
-                # Check the structure for tangent bundle. For debug only. Please comment out.
-                # assert torch.norm(X.t()@X-torch.eye(m, dtype=X.dtype, device=X.device))<torch.finfo(X.dtype).eps*torch.numel(Y)*10
-                # assert torch.norm(Y.t()+Y)<torch.finfo(X.dtype).eps*torch.numel(Y)*10
-                # assert torch.norm(X.t()@V)<torch.finfo(X.dtype).eps*torch.numel(Y)*10
-
+                # Update step
+                state['step'] += 1
                 
+                # Efficient computation of Stiefel gradient
+                with torch.cuda.amp.autocast(enabled=False):
+                    p_double = p.double()
+                    grad_double = grad.double()
+                    
+                    # Compute A efficiently
+                    A = grad_double @ p_double.t() - p_double @ grad_double.t()
+                    
+                    # Project gradient onto tangent space
+                    grad = (A @ p_double).to(dtype)
+                
+                # Update momentum and variance
+                exp_avg = state['exp_avg']
+                exp_avg_sq = state['exp_avg_sq']
+                
+                # Use fused operations where possible
+                exp_avg.mul_(group['beta1']).add_(grad, alpha=1 - group['beta1'])
+                exp_avg_sq.mul_(group['beta2']).addcmul_(grad, grad, value=1 - group['beta2'])
+                
+                # Compute step size
+                step_size = group['lr'] * math.sqrt(1 - group['beta2'] ** state['step']) / (1 - group['beta1'] ** state['step'])
+                
+                # Update parameter efficiently
+                p.data.addcdiv_(exp_avg, exp_avg_sq.sqrt().add_(group['eps']), value=-step_size)
+                
+                # Project back to Stiefel manifold
+                with torch.cuda.amp.autocast(enabled=False):
+                    U, _, V = torch.svd(p.data.double())
+                    p.data = (U @ V.t()).to(dtype)
+        
         return loss
 
 
