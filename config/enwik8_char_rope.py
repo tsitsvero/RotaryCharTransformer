@@ -39,7 +39,7 @@ warmup_iters = 100
 init_from = 'scratch'
 model_type = 'rope'
 use_rational = False
-use_stiefel = True
+use_stiefel = False
 
 # System parameters
 device = 'cuda'
