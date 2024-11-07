@@ -526,7 +526,7 @@ def main():
                 })
 
     if master_process:
-        wandb.finish()
+        wandb.finish() 
 
     if ddp:
         destroy_process_group()
