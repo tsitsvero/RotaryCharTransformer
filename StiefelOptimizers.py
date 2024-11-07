@@ -290,35 +290,26 @@ class StiefelAdam(Optimizer):
         return loss
 
 
-class CombinedOptimizer:
-    def __init__(self, euclidean_optimizer, stiefel_optimizer):
-        self.euclidean_optimizer = euclidean_optimizer
-        self.stiefel_optimizer = stiefel_optimizer
-        self.param_groups = euclidean_optimizer.param_groups + stiefel_optimizer.param_groups
-        
-    def zero_grad(self, set_to_none=False):
-        self.euclidean_optimizer.zero_grad(set_to_none=set_to_none)
-        self.stiefel_optimizer.zero_grad(set_to_none=set_to_none)
-        
-    def step(self, closure=None):
-        # First step with Euclidean optimizer
+class CombinedOptimizer(torch.optim.Optimizer):
+    r"""
+        This can be used when Euclidean and Stiefel parameters are contained in one model and are being optimized at the same time.
+        This is due to that our StiefelSGD and Euclidean SGD (StiefelAdam and Euclidean Adam) uses the same hyperparameters and do not need to be tuned separately.
+    """
+    def __init__(self, *arg):
+        self.optimizer_list=list(arg)
+        param_group=[]
+        for op in self.optimizer_list:
+            for pg in op.param_groups:
+                param_group.append(pg)
+        super().__init__(param_group, defaults=dict())
+    def zero_grad(self, set_to_none: bool = False):
+        for op in self.optimizer_list:
+            op.zero_grad()
+    def step(self, closure):
         loss = None
         if closure is not None:
-            loss = closure()
-            
-        self.euclidean_optimizer.step()
-        
-        # Then step with Stiefel optimizer
-        self.stiefel_optimizer.step(closure)
-        
+            with torch.enable_grad():
+                loss = closure()
+        for op in self.optimizer_list:
+            loss=op.step()
         return loss
-        
-    def state_dict(self):
-        return {
-            'euclidean': self.euclidean_optimizer.state_dict(),
-            'stiefel': self.stiefel_optimizer.state_dict()
-        }
-        
-    def load_state_dict(self, state_dict):
-        self.euclidean_optimizer.load_state_dict(state_dict['euclidean'])
-        self.stiefel_optimizer.load_state_dict(state_dict['stiefel'])
