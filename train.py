@@ -462,7 +462,7 @@ def main():
                 losses = estimate_loss()
                 
                 # Print random sample
-                print_sample(model, X, Y, config)
+                # print_sample(model, X, Y, config)
                 
                 # Print losses and other metrics
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
