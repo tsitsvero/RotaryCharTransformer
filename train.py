@@ -123,38 +123,48 @@ def main():
 
     print_dataset_sample(data_dir)
 
+    # Add this after data_dir initialization but before the training loop
+    def load_data(data_dir):
+        """Load train and validation data into memory"""
+        data_dict = {}
+        for split in ['train', 'valid']:
+            data_path = os.path.join(data_dir, f'{split}.txt')
+            if not os.path.exists(data_path):
+                raise FileNotFoundError(f"Data file not found: {data_path}")
+            
+            with open(data_path, 'rb') as f:
+                data = f.read()
+            
+            # Convert to tensor and move to device
+            data_tensor = torch.frombuffer(data, dtype=torch.uint8)
+            if device_type == 'cuda':
+                data_tensor = data_tensor.pin_memory().to(device, non_blocking=True)
+            else:
+                data_tensor = data_tensor.to(device)
+                
+            data_dict[split] = data_tensor
+            
+            if split == 'train':
+                print("\nData statistics:")
+                print(f"Total length: {len(data)} bytes")
+                print(f"Unique values: {len(set(data))}")
+                print(f"Sample of raw bytes: {list(data[:50])}")
+        
+        return data_dict
+
+    # Load all data into memory
+    print("Loading data into memory...")
+    data_tensors = load_data(data_dir)
+    print("Data loaded successfully!")
+
+    # Modify get_batch to use the preloaded data
     def get_batch(split):
-        """Get a random batch of data from txt file"""
-        data_path = os.path.join(data_dir, f'{split}.txt')
+        """Get a random batch from preloaded data"""
+        data = data_tensors[split]
+        ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],), device=device)
         
-        # First check if the file exists
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found: {data_path}")
-        
-        # Read the entire file
-        with open(data_path, 'rb') as f:
-            data = f.read()
-        
-        # Print some statistics about the data
-        if split == 'train' and not hasattr(get_batch, 'printed_stats'):
-            print("\nData statistics:")
-            print(f"Total length: {len(data)} bytes")
-            print(f"Unique values: {len(set(data))}")
-            print(f"Sample of raw bytes: {list(data[:50])}")
-            get_batch.printed_stats = True
-        
-        # Generate random indices
-        ix = torch.randint(len(data) - config['block_size'], (config['batch_size'],))
-        
-        # Create batches directly from bytes
-        x = torch.stack([torch.tensor([int(b) for b in data[i:i+config['block_size']]]) for i in ix])
-        y = torch.stack([torch.tensor([int(b) for b in data[i+1:i+1+config['block_size']]]) for i in ix])
-        
-        if device_type == 'cuda':
-            x = x.pin_memory().to(device, non_blocking=True)
-            y = y.pin_memory().to(device, non_blocking=True)
-        else:
-            x, y = x.to(device), y.to(device)
+        x = torch.stack([data[i:i+config['block_size']] for i in ix])
+        y = torch.stack([data[i+1:i+1+config['block_size']] for i in ix])
         
         return x, y
 
