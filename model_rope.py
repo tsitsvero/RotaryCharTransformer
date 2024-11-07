@@ -70,27 +70,24 @@ class GPTWithRoPE(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert idx.max() < self.config.vocab_size, f"Input contains token {idx.max()} which is >= vocab size {self.config.vocab_size}"
         
-        # Token embeddings
-        tok_emb = self.transformer.wte(idx)
+        # Token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(idx.long())  # Ensure long dtype for embeddings
         
-        # Forward pass through transformer blocks with JIT
+        # Forward pass through transformer blocks
         x = self.transformer.drop(tok_emb)
-        
-        # Use torch.jit.script on the transformer blocks if possible
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
-            # Use contiguous for better memory layout
+            # Calculate loss if targets are provided
             logits = self.lm_head(x)
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), 
-                targets.contiguous().view(-1),
-                ignore_index=-1
-            )
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.long().view(-1), ignore_index=-1)
         else:
+            # For inference, only compute logits for the last position
             logits = self.lm_head(x[:, [-1], :])
             loss = None
 
@@ -188,32 +185,6 @@ class GPTWithRoPE(nn.Module):
 
     #     return optimizer
 
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
 
 
 class Block(nn.Module):
@@ -245,59 +216,44 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # Enable flash attention if available
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # Use packed storage for better memory efficiency
+            # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size), persistent=False)
-        
-        # Pre-compute rotary embeddings for efficiency
+                                     .view(1, 1, config.block_size, config.block_size))
         self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
-        
+
     def forward(self, x):
-        B, T, C = x.size()
-        
-        # Fuse Q,K,V projections into a single matmul
-        qkv = torch.stack([
-            self.q(x),
-            self.k(x),
-            self.v(x)
-        ], dim=2)
-        
-        # Reshape and transpose in one operation
-        qkv = qkv.view(B, T, 3, self.n_head, C // self.n_head).permute(0, 2, 3, 1, 4)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
-        
-        # Apply rotary embeddings (now more efficient)
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # Apply rotary embeddings to q and k
         q, k = self.rotary_emb(q, k)
-        
-        # Use flash attention when available
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
-            # Efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=None,
-                dropout_p=self.dropout if self.training else 0,
-                is_causal=True,
-                scale=1.0 / math.sqrt(k.size(-1))
-            )
+            # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
-            # Optimized manual implementation
+            # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            # Use additive attention mask for better numerical stability
-            mask = self.bias[:,:,:T,:T]
-            att = att.masked_fill(mask == 0, float('-inf'))
-            att = F.softmax(att, dim=-1, dtype=torch.float32).to(q.dtype)
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
-            y = att @ v
-        
-        # Reshape back efficiently
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        
-        # Output projection
-        return self.resid_dropout(self.c_proj(y))
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+        # re-assemble all head outputs side by side
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
 
 
 class RotaryEmbedding(nn.Module):
