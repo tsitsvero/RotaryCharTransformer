@@ -62,8 +62,7 @@ class Rational(torch.nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         self.coeffs.data[0,1].zero_()
-        exp = torch.tensor([3., 2., 1., 0.], device=i
-        nput.device, dtype=input.dtype)
+        exp = torch.tensor([3., 2., 1., 0.], device=input.device, dtype=input.dtype)
         X = torch.pow(input.unsqueeze(-1), exp)
         PQ = X @ self.coeffs
         output = torch.div(PQ[..., 0], PQ[..., 1])
