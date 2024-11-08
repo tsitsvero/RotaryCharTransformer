@@ -296,7 +296,7 @@ class MLP(nn.Module):
             print("Using Rational activation function with degrees (5,4)")
         else:
             self.act = nn.GELU()
-            print("Using GELU activation function")
+            print(f"Using GELU activation function")
             
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
