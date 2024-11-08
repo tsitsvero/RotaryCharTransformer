@@ -44,30 +44,44 @@ class Rational(torch.nn.Module):
     """
     def __init__(self):
         super().__init__()
-        # Increase coeffs tensor to handle higher orders
-        # First column for P(x), second column for Q(x)
         self.coeffs = torch.nn.Parameter(torch.Tensor(6, 2))
+        self.eps = 1e-7  # Small constant to prevent division by zero
         self.reset_parameters()
 
     def reset_parameters(self):
-        # Initialize with more conservative values to prevent instability
-        # Keep denominator (Q) positive and bounded to avoid division by zero
+        # Even more conservative initialization
+        # Start close to ReLU-like behavior with minimal higher-order terms
         self.coeffs.data = torch.Tensor([
-            [0.1, 0.0],      # x^5 term for P, x^4 term for Q
-            [0.2, 0.1],      # x^4 term for P, x^3 term for Q
-            [1.1915, 0.2],   # x^3 term for P, x^2 term for Q
-            [1.5957, 0.5],   # x^2 term for P, x^1 term for Q
-            [0.5, 1.0],      # x^1 term for P, x^0 term for Q
-            [0.0218, 0.0]    # x^0 term for P
+            [0.01, 0.0],    # x^5 term for P, x^4 term for Q
+            [0.02, 0.01],   # x^4 term for P, x^3 term for Q
+            [0.1, 0.1],     # x^3 term for P, x^2 term for Q
+            [1.0, 0.5],     # x^2 term for P, x^1 term for Q
+            [1.0, 2.0],     # x^1 term for P, x^0 term for Q
+            [0.0, 0.0]      # x^0 term for P
         ])
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         self.coeffs.data[0,1].zero_()  # Ensure highest order of Q is zero
-        # Update exponents for higher order
+        
+        # Clip input to prevent extremely large values
+        input = torch.clamp(input, -100, 100)
+        
         exp = torch.tensor([5., 4., 3., 2., 1., 0.], 
                           device=input.device, 
                           dtype=input.dtype)
+        
         X = torch.pow(input.unsqueeze(-1), exp)
         PQ = X @ self.coeffs
-        output = torch.div(PQ[..., 0], PQ[..., 1])
+        
+        # Add small epsilon to denominator to prevent division by zero
+        denominator = PQ[..., 1] + self.eps
+        
+        # Ensure denominator is positive
+        denominator = torch.abs(denominator)
+        
+        output = torch.div(PQ[..., 0], denominator)
+        
+        # Clip output to prevent explosion
+        output = torch.clamp(output, -100, 100)
+        
         return output
