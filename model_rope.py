@@ -289,6 +289,8 @@ class MLP(nn.Module):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         
+
+        print(f"use_rational: {config.use_rational}")
         # Initialize Rational activation if specified in config
         if config.use_rational:
             # Set degrees to 5,4 for numerator and denominator respectively
