@@ -455,6 +455,9 @@ def main():
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
                 optimizer.step(closure)
             
+            # Step the scheduler after optimizer step
+            scheduler.step()
+            
             # Get next batch for next iteration
             X, Y = get_batch('train', data_dir, config, device, device_type)
             
@@ -554,9 +557,6 @@ def main():
                     'train/batch_loss': lossf,
                     'lr': lr,
                 })
-
-            # Step the scheduler after optimizer step
-            scheduler.step()
 
     if master_process:
         wandb.finish() 
