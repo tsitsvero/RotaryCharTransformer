@@ -33,6 +33,8 @@ class GPTWithRoPE(nn.Module):
         assert config.block_size is not None
         self.config = config
 
+        print(f"use_rational: {config.use_rational}")
+
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),

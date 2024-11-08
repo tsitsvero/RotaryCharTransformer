@@ -38,7 +38,7 @@ warmup_iters = 100
 # Model type and initialization
 init_from = 'scratch'
 model_type = 'rope'
-use_rational = False  # Explicitly disable Rational activation
+use_rational=False  # Explicitly disable Rational activation
 use_stiefel = False
 
 # System parameters
