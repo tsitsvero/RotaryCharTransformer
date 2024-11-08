@@ -38,7 +38,7 @@ warmup_iters = 100
 # Model type and initialization
 init_from = 'scratch'
 model_type = 'rope'
-use_rational = True
+use_rational = False
 use_stiefel = False
 
 # System parameters
