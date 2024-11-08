@@ -216,7 +216,7 @@ def main():
         model = GPTWithRoPE(gptconf)
         print("Using GPTWithRoPE model.")
     else:
-        model = BaselineGPT(gptconf)
+        # model = BaselineGPT(gptconf)
         print("Using BaselineGPT model.")
 
     model.to(device)
