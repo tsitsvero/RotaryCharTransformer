@@ -5,9 +5,9 @@ from torch.nn import functional as F
 from model import GPTConfig
 import inspect
 from dataclasses import dataclass
-from rational import Rational
+# from rational import Rational
+from rational.torch import Rational
 
- 
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 
@@ -286,12 +286,17 @@ class RotaryEmbedding(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        # Choose activation function based on config
-        # Report if using rational activation
-        print(f"Using {'Rational' if config.use_rational else 'GELU'} activation function")
-        self.act = Rational() if config.use_rational else nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        
+        # Initialize Rational activation if specified in config
+        if hasattr(config, 'use_rational') and config.use_rational:
+            self.act = Rational()
+            print("Using Rational activation function")
+        else:
+            self.act = nn.GELU()
+            print("Using GELU activation function")
+            
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
