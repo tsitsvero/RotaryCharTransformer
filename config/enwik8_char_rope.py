@@ -25,8 +25,8 @@ bias = False
 
 # Optimization parameters
 learning_rate = 6e-4
-max_iters = 5000
-lr_decay_iters = 5000
+max_iters = 25000
+lr_decay_iters = 25000
 min_lr = 6e-5
 beta1 = 0.9
 beta2 = 0.95
