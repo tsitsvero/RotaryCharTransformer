@@ -50,14 +50,15 @@ class Rational(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        # Initialize with a simple pattern - you may want to tune these values
+        # Initialize with more conservative values to prevent instability
+        # Keep denominator (Q) positive and bounded to avoid division by zero
         self.coeffs.data = torch.Tensor([
-            [1.1915, 0.0],    # x^5 term for P, x^4 term for Q
-            [1.5957, 2.383],  # x^4 term for P, x^3 term for Q
-            [0.5, 0.0],       # x^3 term for P, x^2 term for Q
-            [0.0218, 1.0],    # x^2 term for P, x^1 term for Q
-            [0.0, 0.0],       # x^1 term for P, x^0 term for Q
-            [0.0, 0.0]        # x^0 term for P
+            [0.1, 0.0],      # x^5 term for P, x^4 term for Q
+            [0.2, 0.1],      # x^4 term for P, x^3 term for Q
+            [1.1915, 0.2],   # x^3 term for P, x^2 term for Q
+            [1.5957, 0.5],   # x^2 term for P, x^1 term for Q
+            [0.5, 1.0],      # x^1 term for P, x^0 term for Q
+            [0.0218, 0.0]    # x^0 term for P
         ])
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
