@@ -300,7 +300,7 @@ def main():
     # First scheduler is linear warmup
     warmup_scheduler = LinearLR(
         optimizer,
-        start_factor=0.0,  # Start from 0
+        start_factor=1e-8,  # Start from near zero but not exactly zero
         end_factor=1.0,    # End at full learning rate
         total_iters=config['warmup_iters']
     )
