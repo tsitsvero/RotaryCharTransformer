@@ -290,7 +290,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         
         # Initialize Rational activation if specified in config
-        if hasattr(config, 'use_rational') and config.use_rational is True:
+        if config.use_rational:
             # Set degrees to 5,4 for numerator and denominator respectively
             self.act = Rational(approx_func="gelu", degrees=(5,4))
             print("Using Rational activation function with degrees (5,4)")
