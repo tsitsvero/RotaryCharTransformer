@@ -38,6 +38,11 @@ import threading
 import queue
 import io
 
+# Add this import at the top
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LinearLR
+from torch.optim.lr_scheduler import SequentialLR
+
 class TextDataset(Dataset):
     def __init__(self, data_path, block_size):
         # Read data once during initialization
@@ -291,9 +296,28 @@ def main():
         else:
             scaler = None
 
-
-
-
+    # Setup learning rate scheduler with warmup
+    # First scheduler is linear warmup
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.0,  # Start from 0
+        end_factor=1.0,    # End at full learning rate
+        total_iters=config['warmup_iters']
+    )
+    
+    # Second scheduler is cosine annealing
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=config['max_iters'] - config['warmup_iters'],
+        eta_min=config['min_lr']
+    )
+    
+    # Combine schedulers
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[config['warmup_iters']]
+    )
 
     iter_num = 0
     best_val_loss = 1e9
@@ -325,24 +349,6 @@ def main():
             out[split] = losses.mean()
         model.train()
         return out
-
-    def get_lr(it):
-        """Implements cosine learning rate schedule with linear warmup"""
-        # Linear warmup for warmup_iters steps
-        if it < config['warmup_iters']:
-            return config['learning_rate'] * it / config['warmup_iters']
-        
-        # If we're past max_iters, return min learning rate
-        if it > config['max_iters']:
-            return config['min_lr']
-        
-        # Otherwise, use cosine decay schedule
-        decay_ratio = (it - config['warmup_iters']) / (config['max_iters'] - config['warmup_iters'])
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
-        
-        # Interpolate between max and min learning rate
-        return config['min_lr'] + coeff * (config['learning_rate'] - config['min_lr'])
 
     X, Y = get_batch('train', data_dir, config, device, device_type)
     running_mfu = -1.0
@@ -403,11 +409,9 @@ def main():
     
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
-            # Update learning rate according to schedule
-            lr = get_lr(iter_num)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-
+            # Get current learning rate
+            lr = optimizer.param_groups[0]['lr']
+            
             # Time the full step
             step_start = time.time()
             
@@ -550,6 +554,9 @@ def main():
                     'train/batch_loss': lossf,
                     'lr': lr,
                 })
+
+            # Step the scheduler after optimizer step
+            scheduler.step()
 
     if master_process:
         wandb.finish() 
