@@ -291,8 +291,9 @@ class MLP(nn.Module):
         
         # Initialize Rational activation if specified in config
         if hasattr(config, 'use_rational') and config.use_rational:
-            self.act = Rational()
-            print("Using Rational activation function")
+            # Set degrees to 5,4 for numerator and denominator respectively
+            self.act = Rational(approx_func="gelu", degrees=(5,4))
+            print("Using Rational activation function with degrees (5,4)")
         else:
             self.act = nn.GELU()
             print("Using GELU activation function")
