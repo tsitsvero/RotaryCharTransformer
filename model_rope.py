@@ -7,6 +7,7 @@ import inspect
 from dataclasses import dataclass
 # from rational import Rational
 from rational.torch import Rational
+# https://github.com/ml-research/rational_activations
 
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
