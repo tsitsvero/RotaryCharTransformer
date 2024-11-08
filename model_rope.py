@@ -288,6 +288,8 @@ class MLP(nn.Module):
         super().__init__()
         self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         # Choose activation function based on config
+        # Report if using rational activation
+        print(f"Using {'Rational' if config.use_rational else 'GELU'} activation function")
         self.act = Rational() if config.use_rational else nn.GELU()
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
