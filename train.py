@@ -327,12 +327,21 @@ def main():
         return out
 
     def get_lr(it):
+        """Implements cosine learning rate schedule with linear warmup"""
+        # Linear warmup for warmup_iters steps
         if it < config['warmup_iters']:
             return config['learning_rate'] * it / config['warmup_iters']
-        if it > config['lr_decay_iters']:
+        
+        # If we're past max_iters, return min learning rate
+        if it > config['max_iters']:
             return config['min_lr']
-        decay_ratio = (it - config['warmup_iters']) / (config['lr_decay_iters'] - config['warmup_iters'])
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+        
+        # Otherwise, use cosine decay schedule
+        decay_ratio = (it - config['warmup_iters']) / (config['max_iters'] - config['warmup_iters'])
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+        
+        # Interpolate between max and min learning rate
         return config['min_lr'] + coeff * (config['learning_rate'] - config['min_lr'])
 
     X, Y = get_batch('train', data_dir, config, device, device_type)
@@ -394,7 +403,8 @@ def main():
     
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
-            lr = config['learning_rate'] if not config['decay_lr'] else get_lr(iter_num)
+            # Update learning rate according to schedule
+            lr = get_lr(iter_num)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
