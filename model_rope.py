@@ -2,7 +2,6 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from model import GPTConfig
 import inspect
 from dataclasses import dataclass
 # from rational import Rational
