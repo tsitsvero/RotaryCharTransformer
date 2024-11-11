@@ -48,3 +48,6 @@ compile = False
 
 # Fixed vocab size for enwik8
 vocab_size = 256  # For byte-level encoding
+
+# Add use_rotary parameter to config
+use_rotary = True  # Set to False to use learnable embeddings instead

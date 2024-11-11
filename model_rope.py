@@ -12,6 +12,9 @@ from rational.torch import Rational
 # Import StiefelAdam
 from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 
+# Add to imports at top
+from torch.nn import Parameter
+
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
     q_cos = q * cos
@@ -226,35 +229,48 @@ class CausalSelfAttention(nn.Module):
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
-        self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
+
+        # Initialize either rotary or learnable embeddings based on config
+        self.use_rotary = config.use_rotary
+        if self.use_rotary:
+            self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
+        else:
+            # Initialize learnable positional embeddings
+            self.pos_emb = Parameter(torch.zeros(1, config.block_size, config.n_embd))
+            torch.nn.init.normal_(self.pos_emb, mean=0.0, std=0.02)
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # Calculate query, key, values for all heads
+        q = self.q(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        k = self.k(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = self.v(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-        # Apply rotary embeddings to q and k
-        q, k = self.rotary_emb(q, k)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+        if self.use_rotary:
+            # Apply rotary embeddings
+            q, k = self.rotary_emb(q, k)
         else:
-            # manual implementation of attention
+            # Add learnable positional embeddings to input before Q,K,V projections
+            x = x + self.pos_emb[:, :T, :]
+            
+        # Rest of the attention computation remains the same
+        if self.flash:
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, 
+                attn_mask=None, dropout_p=self.dropout if self.training else 0, 
+                is_causal=True)
+        else:
+            # Manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            y = att @ v
 
-        # re-assemble all head outputs side by side
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
-
-        # output projection
+        # Re-assemble heads
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        
+        # Output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
 
