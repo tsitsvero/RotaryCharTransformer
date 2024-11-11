@@ -14,6 +14,8 @@ from StiefelOptimizers import StiefelAdam, CombinedOptimizer
 # Add to imports at top
 from torch.nn import Parameter
 
+from model import GPTConfig
+
 def apply_rotary_pos_emb(q, cos, sin):
     # Apply rotary position embedding to query and key
     q_cos = q * cos

@@ -51,3 +51,5 @@ vocab_size = 256  # For byte-level encoding
 
 # Add use_rotary parameter to config
 use_rotary = True  # Enable RoPE
+
+# Let's see the contents of this file
