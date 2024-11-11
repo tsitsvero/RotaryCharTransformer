@@ -216,8 +216,9 @@ def main():
 
     config['vocab_size'] = 256  # Force vocab size to 256 for byte-level encoding
 
-    # Update the gpt_config_keys list to only include valid GPTConfig parameters
-    gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'dropout', 'use_rational']
+    # Update the gpt_config_keys list to include use_rotary
+    gpt_config_keys = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 
+                      'vocab_size', 'dropout', 'use_rational', 'use_rotary']
     gpt_config = {k: v for k, v in config.items() if k in gpt_config_keys}
     gptconf = GPTConfig(**gpt_config)
 

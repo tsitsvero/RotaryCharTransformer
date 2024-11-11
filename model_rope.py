@@ -211,6 +211,11 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
+        
+        # Print config values for debugging
+        print(f"Config values - use_rotary: {config.use_rotary}")
+        
+        self.use_rotary = config.use_rotary  # Use directly from config
         # key, query, value projections for all heads, but in a batch
         self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
@@ -232,13 +237,13 @@ class CausalSelfAttention(nn.Module):
                                      .view(1, 1, config.block_size, config.block_size))
 
         # Initialize either rotary or learnable embeddings based on config
-        self.use_rotary = config.use_rotary
         if self.use_rotary:
             print("Using rotary embeddings")
             self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
+            self.pos_emb = None
         else:
-            # Initialize learnable positional embeddings
-            print("Using simple learnable embeddings")
+            print("Using learnable positional embeddings")
+            self.rotary_emb = None
             self.pos_emb = Parameter(torch.zeros(1, config.block_size, config.n_embd))
             torch.nn.init.normal_(self.pos_emb, mean=0.0, std=0.02)
 
