@@ -17,9 +17,9 @@ batch_size = 64  # Reduced batch size for stability
 block_size = 128  # Reduced context length
 
 # Model parameters
-n_layer = 6
-n_head = 6
-n_embd = 72
+n_layer = 8
+n_head = 8
+n_embd = 384
 dropout = 0.1  # Removed dropout initially for debugging
 bias = False
 
@@ -38,7 +38,7 @@ warmup_iters = 100
 # Model type and initialization
 init_from = 'scratch'
 model_type = 'rope'
-use_rational=False  # Explicitly disable Rational activation
+use_rational=True  # Explicitly disable Rational activation
 use_stiefel = False
 
 # System parameters
