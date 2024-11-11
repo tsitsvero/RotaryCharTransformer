@@ -234,9 +234,11 @@ class CausalSelfAttention(nn.Module):
         # Initialize either rotary or learnable embeddings based on config
         self.use_rotary = config.use_rotary
         if self.use_rotary:
+            print("Using rotary embeddings")
             self.rotary_emb = RotaryEmbedding(dim=config.n_embd // config.n_head)
         else:
             # Initialize learnable positional embeddings
+            print("Using simple learnable embeddings")
             self.pos_emb = Parameter(torch.zeros(1, config.block_size, config.n_embd))
             torch.nn.init.normal_(self.pos_emb, mean=0.0, std=0.02)
 
