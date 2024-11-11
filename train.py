@@ -43,6 +43,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim.lr_scheduler import LinearLR
 from torch.optim.lr_scheduler import SequentialLR
 
+# Import the config values
+from config.enwik8_char_rope import *
+
 class TextDataset(Dataset):
     def __init__(self, data_path, block_size):
         # Read data once during initialization
