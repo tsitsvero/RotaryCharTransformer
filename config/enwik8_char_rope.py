@@ -50,4 +50,4 @@ compile = False
 vocab_size = 256  # For byte-level encoding
 
 # Add use_rotary parameter to config
-use_rotary = True  # Set to False to use learnable embeddings instead
+use_rotary = True  # Enable RoPE
