@@ -318,7 +318,7 @@ class MLP(nn.Module):
         # Use rational activation for first 2 and last 2 layers
         use_rational_for_this_layer = False
         if config.use_rational and layer_idx is not None:
-            if layer_idx < 2 or layer_idx >= config.n_layer - 2:
+            if True:#layer_idx < 2 or layer_idx >= config.n_layer - 2:
                 use_rational_for_this_layer = True
                 print(f"Layer {layer_idx}: Using Rational activation")
             else:
