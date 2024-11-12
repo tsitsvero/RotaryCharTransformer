@@ -406,11 +406,12 @@ def main():
 
     # Initialize automatic mixed precision scaler
     if config['dtype'] == 'float16':
-        scaler = torch.amp.GradScaler(
-            init_scale=2**16,
-            growth_factor=2.0,
+        scaler = torch.cuda.amp.GradScaler(
+            init_scale=2**10,  # Start with a smaller scale
+            growth_factor=1.5,  # Grow more slowly
             backoff_factor=0.5,
-            growth_interval=2000
+            growth_interval=2000,
+            enabled=True
         )
     else:
         scaler = None
@@ -426,59 +427,65 @@ def main():
             # Time the full step
             step_start = time.time()
             
-            # Zero gradients at the start of accumulation
-            optimizer.zero_grad(set_to_none=True)
-            total_loss = 0.0
-            
-            # Accumulate gradients
-            for micro_step in range(grad_acc_steps):
-                with torch.amp.autocast('cuda', enabled=scaler is not None):
-                    logits, loss = model(X, Y)
-                    loss = loss / grad_acc_steps
+            try:
+                # Zero gradients at the start of accumulation
+                optimizer.zero_grad(set_to_none=True)
+                total_loss = 0.0
                 
-                # Check for NaN loss
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    print(f"Warning: NaN/Inf detected in loss at iter {iter_num}")
-                    # Skip this batch
-                    optimizer.zero_grad(set_to_none=True)
-                    continue
+                # Accumulate gradients
+                for micro_step in range(grad_acc_steps):
+                    with torch.amp.autocast('cuda', enabled=scaler is not None):
+                        logits, loss = model(X, Y)
+                        loss = loss / grad_acc_steps
+                    
+                    # Check for NaN loss
+                    if not torch.isfinite(loss).all():
+                        print(f"Warning: Non-finite loss detected at iter {iter_num}")
+                        raise ValueError("Non-finite loss")
+                    
+                    # Backward pass with gradient scaling
+                    if scaler is not None:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                    
+                    # Check for NaN gradients
+                    if not check_grad_finite(model):
+                        print(f"Warning: Non-finite gradients detected at iter {iter_num}")
+                        raise ValueError("Non-finite gradients")
+                    
+                    total_loss += loss.item()
+                    
+                    # Prefetch next batch while computing gradients
+                    if micro_step < grad_acc_steps - 1:
+                        X, Y = get_batch('train', data_dir, config, device, device_type)
                 
-                # Backward pass with gradient scaling
+                # Gradient clipping
+                if config['grad_clip'] != 0.0:
+                    if scaler is not None:
+                        scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
+                
+                # Optimizer step with gradient scaling
                 if scaler is not None:
-                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
                 else:
-                    loss.backward()
+                    optimizer.step()
                 
-                # Check for NaN gradients
-                for name, param in model.named_parameters():
-                    if param.grad is not None:
-                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                            print(f"Warning: NaN/Inf detected in gradients for {name} at iter {iter_num}")
-                            optimizer.zero_grad(set_to_none=True)
-                            continue
+                # Step the scheduler after optimizer step
+                scheduler.step()
                 
-                total_loss += loss.item()
-                
-                # Prefetch next batch while computing gradients
-                if micro_step < grad_acc_steps - 1:
-                    X, Y = get_batch('train', data_dir, config, device, device_type)
-            
-            # Gradient clipping
-            if config['grad_clip'] != 0.0:
+            except (ValueError, RuntimeError) as e:
+                print(f"Error during training step: {str(e)}")
+                # Reset the optimizer and scaler states
+                optimizer.zero_grad(set_to_none=True)
                 if scaler is not None:
-                    scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-            
-            # Optimizer step with gradient scaling
-            if scaler is not None:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
-            
-            # Step the scheduler after optimizer step
-            scheduler.step()
-            
+                    scaler.update()
+                # Skip to next batch
+                X, Y = get_batch('train', data_dir, config, device, device_type)
+                continue
+
             # Get next batch for next iteration
             X, Y = get_batch('train', data_dir, config, device, device_type)
             
@@ -682,6 +689,16 @@ def generate_sequence(model, device, length=100, temperature=0.8):
     
     model.train()  # Return model to training mode
     return result
+
+# Add this helper function at the top level
+def check_grad_finite(model):
+    """Check if all gradients are finite"""
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            if not torch.isfinite(param.grad).all():
+                print(f"Non-finite gradient in {name}")
+                return False
+    return True
 
 if __name__ == '__main__':
     main()
