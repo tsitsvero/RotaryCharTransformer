@@ -303,8 +303,8 @@ def main():
     # First scheduler is linear warmup
     warmup_scheduler = LinearLR(
         optimizer,
-        start_factor=1e-8,  # Start from near zero but not exactly zero
-        end_factor=1.0,    # End at full learning rate
+        start_factor=1e-4,  # Start from a slightly higher value
+        end_factor=1.0,
         total_iters=config['warmup_iters']
     )
     
@@ -312,7 +312,7 @@ def main():
     cosine_scheduler = CosineAnnealingLR(
         optimizer,
         T_max=config['max_iters'] - config['warmup_iters'],
-        eta_min=config['min_lr']
+        eta_min=config['min_lr'],
     )
     
     # Combine schedulers
@@ -405,7 +405,15 @@ def main():
     timer = Timer()
 
     # Initialize automatic mixed precision scaler
-    scaler = torch.amp.GradScaler('cuda') if device_type == 'cuda' and config['dtype'] == 'float16' else None
+    if config['dtype'] == 'float16':
+        scaler = torch.amp.GradScaler(
+            init_scale=2**16,
+            growth_factor=2.0,
+            backoff_factor=0.5,
+            growth_interval=2000
+        )
+    else:
+        scaler = None
     
     # Create gradient accumulation buffer
     grad_acc_steps = config['gradient_accumulation_steps']
@@ -428,12 +436,27 @@ def main():
                     logits, loss = model(X, Y)
                     loss = loss / grad_acc_steps
                 
+                # Check for NaN loss
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                    print(f"Warning: NaN/Inf detected in loss at iter {iter_num}")
+                    # Skip this batch
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
+                
                 # Backward pass with gradient scaling
                 if scaler is not None:
                     scaler.scale(loss).backward()
                 else:
                     loss.backward()
-                    
+                
+                # Check for NaN gradients
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            print(f"Warning: NaN/Inf detected in gradients for {name} at iter {iter_num}")
+                            optimizer.zero_grad(set_to_none=True)
+                            continue
+                
                 total_loss += loss.item()
                 
                 # Prefetch next batch while computing gradients
@@ -447,16 +470,11 @@ def main():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
             
             # Optimizer step with gradient scaling
-            def closure():
-                return loss
-
             if scaler is not None:
-                scaler.step(optimizer, closure)
+                scaler.step(optimizer)
                 scaler.update()
             else:
-                if config['grad_clip'] != 0.0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
-                optimizer.step(closure)
+                optimizer.step()
             
             # Step the scheduler after optimizer step
             scheduler.step()
