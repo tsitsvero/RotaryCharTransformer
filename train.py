@@ -489,14 +489,6 @@ def main():
                 print(f"\nStep {iter_num}: train loss {losses['train']:.4f} ({train_bpc:.3f} bpc), "
                       f"valid loss {losses['valid']:.4f} ({valid_bpc:.3f} bpc)")
                 
-                # Check orthogonality for all attention matrices
-                ortho_metrics = compute_orthogonality_error(raw_model)
-                print(f"Orthogonality errors:")
-                print(f"Stiefel matrices - mean: {ortho_metrics['stiefel_mean']:.6f}, "
-                      f"max: {ortho_metrics['stiefel_max'][1]:.6f} ({ortho_metrics['stiefel_max'][0]})")
-                print(f"Other matrices  - mean: {ortho_metrics['other_mean']:.6f}, "
-                      f"max: {ortho_metrics['other_max'][1]:.6f} ({ortho_metrics['other_max'][0]})")
-                
                 # Log metrics to wandb
                 wandb.log({
                     'iter': iter_num,
@@ -505,26 +497,11 @@ def main():
                     'valid/loss': losses['valid'],
                     'valid/bpc': valid_bpc,
                     'lr': lr,
-                    'ortho/stiefel_mean': ortho_metrics['stiefel_mean'],
-                    'ortho/stiefel_rel_mean': ortho_metrics['stiefel_rel_mean'],
-                    'ortho/other_mean': ortho_metrics['other_mean'],
-                    'ortho/other_rel_mean': ortho_metrics['other_rel_mean'],
-                    'ortho/stiefel_max': ortho_metrics['stiefel_max'][1],
-                    'ortho/stiefel_max_rel': ortho_metrics['stiefel_max'][2],
-                })
-                
-                print(f"\nStep {iter_num}: train loss {losses['train']:.4f}, valid loss {losses['valid']:.4f}")
-                
-                # Log metrics to wandb
-                wandb.log({
-                    'iter': iter_num,
-                    'train/loss': losses['train'],
-                    'valid/loss': losses['valid'],
-                    'lr': lr,
                 })
                 
                 if losses['valid'] < best_val_loss or config['always_save_checkpoint']:
                     best_val_loss = losses['valid']
+                    best_val_bpc = best_val_loss / math.log(2)  # Convert to BPC
                     checkpoint = {
                         'model': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
@@ -535,9 +512,13 @@ def main():
                     checkpoint_path = os.path.join(config['out_dir'], 'ckpt.pt')
                     torch.save(checkpoint, checkpoint_path)
                     print(f"Saved checkpoint to {checkpoint_path}")
+                    print(f"Best validation loss: {best_val_loss:.4f} ({best_val_bpc:.3f} bpc)")
                     
                     # Log best val loss to wandb
-                    wandb.log({'best_val_loss': best_val_loss})
+                    wandb.log({
+                        'best_val_loss': best_val_loss,
+                        'best_val_bpc': best_val_bpc
+                    })
 
             iter_num += 1
             local_iter_num += 1
@@ -633,26 +614,47 @@ def print_sample(model, x, y, config):
 
 # Add this function after print_sample
 @torch.no_grad()
-def generate_sequence(model, device, length=100, temperature=1.0):
-    """Generate a sequence starting with 'hello'"""
+def generate_sequence(model, device, length=100, temperature=0.8):
+    """Generate a sequence starting with 'hello' with improved numerical stability"""
     # Convert 'hello' to byte encoding
     context = torch.tensor([ord(c) for c in 'hello'], dtype=torch.long, device=device).unsqueeze(0)
     
     generated = []
-    for _ in range(length):
-        # Get logits from model
-        logits, _ = model(context)
-        logits = logits[:, -1, :] / temperature
-        probs = F.softmax(logits, dim=-1)
-        
-        # Sample from the distribution
-        next_token = torch.multinomial(probs, num_samples=1)
-        
-        # Append to generated sequence
-        generated.append(next_token.item())
-        
-        # Update context
-        context = torch.cat((context, next_token), dim=1)
+    model.eval()  # Ensure model is in eval mode
+    
+    try:
+        for _ in range(length):
+            # Get logits from model
+            logits, _ = model(context)
+            logits = logits[:, -1, :]  # Get last token's logits
+            
+            # Apply temperature and clip to prevent extreme values
+            logits = torch.clamp(logits, -100, 100)  # Prevent extreme values
+            logits = logits / max(temperature, 1e-7)  # Prevent division by zero
+            
+            # Apply softmax with better numerical stability
+            probs = F.softmax(logits, dim=-1)
+            
+            # Check for NaN/Inf values
+            if torch.isnan(probs).any() or torch.isinf(probs).any():
+                print("Warning: NaN or Inf detected in probabilities")
+                # Fallback to argmax sampling
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            else:
+                # Sample from the distribution
+                next_token = torch.multinomial(probs, num_samples=1)
+            
+            # Append to generated sequence
+            generated.append(next_token.item())
+            
+            # Update context (only keep last n tokens to prevent context growth)
+            max_context = 64  # Adjust based on your model's block size
+            context = torch.cat((context[:, -max_context:], next_token), dim=1)
+    
+    except Exception as e:
+        print(f"Error during generation: {str(e)}")
+        # Return what we have so far
+        pass
     
     # Convert bytes to string, including the 'hello' prefix
     try:
@@ -660,6 +662,7 @@ def generate_sequence(model, device, length=100, temperature=1.0):
     except:
         result = 'hello' + ''.join(chr(b) for b in generated)
     
+    model.train()  # Return model to training mode
     return result
 
 if __name__ == '__main__':
