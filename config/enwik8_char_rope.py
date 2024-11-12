@@ -24,10 +24,10 @@ dropout = 0.1  # Removed dropout initially for debugging
 bias = False
 
 # Optimization parameters
-learning_rate = 6e-4
+learning_rate = 1e-4
 max_iters = 25000
 lr_decay_iters = 25000
-min_lr = 6e-5
+min_lr = 1e-5
 beta1 = 0.9
 beta2 = 0.95
 weight_decay = 0.1
