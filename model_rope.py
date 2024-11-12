@@ -42,7 +42,7 @@ class GPTWithRoPE(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            h = nn.ModuleList([Block(config, layer_idx=i) for i in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd)
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -195,12 +195,12 @@ class GPTWithRoPE(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx=None):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = MLP(config)
+        self.mlp = MLP(config, layer_idx)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -311,20 +311,25 @@ class RotaryEmbedding(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx=None):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         
-
-        print(f"use_rational: {config.use_rational}")
-        # Initialize Rational activation if specified in config
-        if config.use_rational:
+        # Use rational activation for first 2 and last 2 layers
+        use_rational_for_this_layer = False
+        if config.use_rational and layer_idx is not None:
+            if layer_idx < 2 or layer_idx >= config.n_layer - 2:
+                use_rational_for_this_layer = True
+                print(f"Layer {layer_idx}: Using Rational activation")
+            else:
+                print(f"Layer {layer_idx}: Using GELU activation")
+        
+        if use_rational_for_this_layer:
             # Set degrees to 5,4 for numerator and denominator respectively
             self.act = Rational(approx_func="gelu", degrees=(5,4))
-            print("Using Rational activation function with degrees (5,4)")
+            print(f"Initialized Rational activation for layer {layer_idx}")
         else:
             self.act = nn.GELU()
-            print("Using GELU activation function")
             
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
