@@ -413,6 +413,8 @@ def main():
             growth_interval=2000,
             enabled=True
         )
+        # Initialize found_inf tensor
+        scaler._found_inf = torch.zeros(1, device=device)
     else:
         scaler = None
     
@@ -441,6 +443,9 @@ def main():
                     # Check for NaN loss
                     if not torch.isfinite(loss).all():
                         print(f"Warning: Non-finite loss detected at iter {iter_num}")
+                        if scaler is not None:
+                            # Mark iteration as having inf/nan for proper scaler update
+                            scaler._found_inf.fill_(1)
                         raise ValueError("Non-finite loss")
                     
                     # Backward pass with gradient scaling
@@ -452,6 +457,9 @@ def main():
                     # Check for NaN gradients
                     if not check_grad_finite(model):
                         print(f"Warning: Non-finite gradients detected at iter {iter_num}")
+                        if scaler is not None:
+                            # Mark iteration as having inf/nan for proper scaler update
+                            scaler._found_inf.fill_(1)
                         raise ValueError("Non-finite gradients")
                     
                     total_loss += loss.item()
@@ -481,6 +489,7 @@ def main():
                 # Reset the optimizer and scaler states
                 optimizer.zero_grad(set_to_none=True)
                 if scaler is not None:
+                    # Ensure proper scaler update when skipping steps
                     scaler.update()
                 # Skip to next batch
                 X, Y = get_batch('train', data_dir, config, device, device_type)
