@@ -153,6 +153,23 @@ def get_batch(split, data_dir, config, device, device_type):
     
     return x, y
 
+# Add this function before main()
+@torch.no_grad()
+def estimate_loss(model, data_dir, config, device, device_type, ctx):
+    """Estimate loss on train and validation sets"""
+    out = {}
+    model.eval()
+    for split in ['train', 'valid']:
+        losses = torch.zeros(config['eval_iters'])
+        for k in range(config['eval_iters']):
+            X, Y = get_batch(split, data_dir, config, device, device_type)
+            with ctx:
+                logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='Configuration file')
@@ -530,7 +547,7 @@ def main():
                 })
 
             if iter_num % config['eval_interval'] == 0 and master_process:
-                losses = estimate_loss()
+                losses = estimate_loss(model, data_dir, config, device, device_type, ctx)
                 
                 # Calculate BPC (bits per character) from losses
                 train_bpc = losses['train'] / math.log(2)
