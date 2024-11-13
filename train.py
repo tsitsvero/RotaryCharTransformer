@@ -338,63 +338,6 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Number of parameters: {total_params/1e6:.2f}M")
 
-    # Count parameters by type
-    param_counts = {
-        'total': total_params,
-        'trainable': sum(p.numel() for p in model.parameters() if p.requires_grad),
-        'non_trainable': sum(p.numel() for p in model.parameters() if not p.requires_grad),
-    }
-
-    if use_stiefel:
-        # Count Stiefel parameters
-        stiefel_params_count = sum(p.numel() for n, p in model.named_parameters() 
-                                  if any(x in n for x in ['7.attn.q.weight', '7.attn.k.weight']) 
-                                  and p.requires_grad)
-        param_counts.update({
-            'stiefel': stiefel_params_count,
-            'non_stiefel': param_counts['trainable'] - stiefel_params_count
-        })
-
-    # Add these counts to wandb_config
-    wandb_config.update({
-        'params/total': param_counts['total'],
-        'params/trainable': param_counts['trainable'],
-        'params/non_trainable': param_counts['non_trainable']
-    })
-
-    if use_stiefel:
-        wandb_config.update({
-            'params/stiefel': param_counts['stiefel'],
-            'params/non_stiefel': param_counts['non_stiefel']
-        })
-
-    # Print parameter counts
-    print("\nParameter counts:")
-    for k, v in param_counts.items():
-        print(f"{k}: {v:,} ({v/1e6:.2f}M)")
-
-    @torch.no_grad()
-    def estimate_loss():
-        out = {}
-        model.eval()
-        for split in ['train', 'valid']:
-            losses = torch.zeros(config['eval_iters'])
-            for k in range(config['eval_iters']):
-                X, Y = get_batch(split, data_dir, config, device, device_type)
-                with ctx:
-                    logits, loss = model(X, Y)
-                losses[k] = loss.item()
-            out[split] = losses.mean()
-        model.train()
-        return out
-
-    X, Y = get_batch('train', data_dir, config, device, device_type)
-    running_mfu = -1.0
-    t0 = time.time()
-
-    local_iter_num = 0
-    raw_model = model.module if ddp else model
-
     # Initialize wandb
     if master_process:
         # Filter out non-serializable config values
@@ -430,6 +373,41 @@ def main():
             'gradient_accumulation_steps': config['gradient_accumulation_steps'],
             'tokens_per_iter': tokens_per_iter,
         }
+
+        # Count parameters by type
+        param_counts = {
+            'total': total_params,
+            'trainable': sum(p.numel() for p in model.parameters() if p.requires_grad),
+            'non_trainable': sum(p.numel() for p in model.parameters() if not p.requires_grad),
+        }
+
+        if use_stiefel:
+            # Count Stiefel parameters
+            stiefel_params_count = sum(p.numel() for n, p in model.named_parameters() 
+                                      if any(x in n for x in ['7.attn.q.weight', '7.attn.k.weight']) 
+                                      and p.requires_grad)
+            param_counts.update({
+                'stiefel': stiefel_params_count,
+                'non_stiefel': param_counts['trainable'] - stiefel_params_count
+            })
+
+        # Add these counts to wandb_config
+        wandb_config.update({
+            'params/total': param_counts['total'],
+            'params/trainable': param_counts['trainable'],
+            'params/non_trainable': param_counts['non_trainable']
+        })
+
+        if use_stiefel:
+            wandb_config.update({
+                'params/stiefel': param_counts['stiefel'],
+                'params/non_stiefel': param_counts['non_stiefel']
+            })
+
+        # Print parameter counts
+        print("\nParameter counts:")
+        for k, v in param_counts.items():
+            print(f"{k}: {v:,} ({v/1e6:.2f}M)")
         
         wandb.init(
             project="transformer-stiefel",
