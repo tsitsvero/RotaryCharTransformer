@@ -17,8 +17,8 @@ batch_size = 64  # Reduced batch size for stability
 block_size = 256  # Reduced context length
 
 # Model parameters
-n_layer = 9
-n_head = 8
+n_layer = 12
+n_head = 6
 n_embd = 512
 dropout = 0.1  # Removed dropout initially for debugging
 bias = False
