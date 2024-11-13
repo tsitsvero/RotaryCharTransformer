@@ -434,6 +434,10 @@ def main():
     # Create gradient accumulation buffer
     grad_acc_steps = config['gradient_accumulation_steps']
     
+    # Add this before the training loop starts (before the tqdm line)
+    X, Y = get_batch('train', data_dir, config, device, device_type)
+
+    # Then the training loop starts
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
         while iter_num < config['max_iters']:
             # Get current learning rate
