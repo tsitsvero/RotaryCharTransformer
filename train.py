@@ -248,6 +248,9 @@ def main():
 
     model.to(device)
 
+    # Add this line after model initialization (after model.to(device))
+    raw_model = model.module if ddp else model
+
     if not use_stiefel:
 
         # Initialize optimizer outside of the model
