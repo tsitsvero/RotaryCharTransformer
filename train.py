@@ -456,6 +456,9 @@ def main():
     
     # Add this before the training loop starts (before the tqdm line)
     X, Y = get_batch('train', data_dir, config, device, device_type)
+    
+    # Initialize local_iter_num
+    local_iter_num = 0
 
     # Then the training loop starts
     with tqdm(total=config['max_iters'], desc="Training Progress") as pbar:
