@@ -19,7 +19,7 @@ block_size = 256  # Reduced context length
 # Model parameters
 n_layer = 10
 n_head = 10
-n_embd = 512
+n_embd = 500
 dropout = 0.1  # Removed dropout initially for debugging
 bias = False
 
